@@ -80,6 +80,7 @@ AGENTS: dict[str, AgentDict] = {
             r"GitHub Copilot",
             r"gh copilot",
             r"copilot-cli",
+            r"Copilot v\d+\.\d+",  # TUI 起動バナー（可視テキスト）
         ],
         "status_patterns": {
             "waiting": [
