@@ -1,0 +1,47 @@
+/* ============================================================
+   terminal.css – xterm.js terminal instance styling
+   Agent Watch Terminal
+   ============================================================ */
+
+/* ── Terminal wrapper (one per session, shown/hidden) ────── */
+.terminal-wrapper {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.terminal-wrapper.hidden {
+  display: none;
+}
+
+/* xterm.js container fills the wrapper */
+.terminal-wrapper .xterm {
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+}
+
+/* ── xterm.js overrides (Catppuccin Mocha integration) ──── */
+
+/* Use custom scrollbar from theme.css instead of xterm default */
+.xterm .xterm-viewport {
+  overflow-y: hidden !important;
+}
+
+/* Selection styling – matches Catppuccin surface2 */
+.xterm .xterm-selection div {
+  background: rgba(88, 91, 112, 0.5) !important;
+}
+
+/* Hide overview ruler decoration */
+.xterm .xterm-decoration-overview-ruler {
+  display: none;
+}
+
+/* ── Focus indicator ────────────────────────────────────── */
+.terminal-wrapper:focus-within {
+  /* No visible outline; terminal handles its own focus */
+  outline: none;
+}

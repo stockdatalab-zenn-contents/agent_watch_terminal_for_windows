@@ -1,0 +1,53 @@
+/* ============================================================
+   scrollbar.css — Agent Watch Terminal: custom terminal scrollbar
+   Replaces xterm.js default scrollbar with a minimal,
+   auto-hiding overlay scrollbar.
+   ============================================================ */
+
+/* ---- Scrollbar container (right edge of terminal) ---- */
+.custom-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  background: transparent;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+/* Show on hover over terminal wrapper or while scrolling */
+.terminal-wrapper:hover .custom-scrollbar,
+.custom-scrollbar.active {
+  opacity: 1;
+}
+
+/* ---- Clickable track area ---- */
+.custom-scrollbar-track {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  cursor: pointer;
+}
+
+/* ---- Draggable thumb ---- */
+.custom-scrollbar-thumb {
+  position: absolute;
+  right: 2px;
+  width: 8px;
+  min-height: 30px;
+  background: var(--ctp-surface2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, width 0.15s;
+}
+
+.custom-scrollbar-thumb:hover,
+.custom-scrollbar-thumb.dragging {
+  background: var(--ctp-overlay0);
+  width: 10px;
+  right: 1px;
+}

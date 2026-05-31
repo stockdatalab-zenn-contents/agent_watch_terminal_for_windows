@@ -1,0 +1,105 @@
+{
+  "terminal": {
+    "_doc": {
+      "_section": "ターミナル外観",
+      "font_family": "フォントファミリー",
+      "font_size": "フォントサイズ (px)",
+      "cursor_style": "カーソル形状 (bar / block / underline)",
+      "cursor_blink": "カーソル点滅の有効/無効。false で描画負荷軽減（GPU なし環境推奨）",
+      "scrollback": "スクロールバッファ行数。GPU なし環境では 1000〜2000 推奨",
+      "allow_transparency": "ターミナル背景の透過。false で xterm.js 描画が高速化（GPU なし環境推奨）",
+      "theme": "Catppuccin Mocha 準拠のカラーテーマ (background, foreground, cursor 等 16色+α)"
+    },
+    "font_family": "Consolas, 'Segoe UI Emoji', 'Courier New', monospace",
+    "font_size": 14,
+    "cursor_style": "bar",
+    "cursor_blink": false,
+    "scrollback": 2000,
+    "allow_transparency": false,
+    "theme": {
+      "background": "#1e1e2e",
+      "foreground": "#cdd6f4",
+      "cursor": "#f5e0dc",
+      "cursor_accent": "#1e1e2e",
+      "selection_background": "rgba(88, 91, 112, 0.5)",
+      "black": "#45475a",
+      "red": "#f38ba8",
+      "green": "#a6e3a1",
+      "yellow": "#f9e2af",
+      "blue": "#89b4fa",
+      "magenta": "#f5c2e7",
+      "cyan": "#94e2d5",
+      "white": "#bac2de",
+      "bright_black": "#585b70",
+      "bright_red": "#f38ba8",
+      "bright_green": "#a6e3a1",
+      "bright_yellow": "#f9e2af",
+      "bright_blue": "#89b4fa",
+      "bright_magenta": "#f5c2e7",
+      "bright_cyan": "#94e2d5",
+      "bright_white": "#a6adc8"
+    }
+  },
+  "window": {
+    "_doc": {
+      "_section": "ウィンドウ",
+      "width": "初期幅 (px)",
+      "height": "初期高さ (px)",
+      "opacity": "ウィンドウ透明度 (0.0〜1.0)。1.0 で半透明合成が不要になり描画負荷軽減（GPU なし環境推奨）",
+      "always_on_top": "常に最前面表示",
+      "title": "ウィンドウタイトル",
+      "debug": "デバッグモード (DevTools 有効化)",
+      "reduce_motion": "CSS アニメーション・トランジションを無効化（GPU なし環境推奨）"
+    },
+    "width": 1000,
+    "height": 600,
+    "opacity": 1.0,
+    "always_on_top": false,
+    "title": "Agent Watch Terminal",
+    "debug": false,
+    "reduce_motion": true
+  },
+  "notification": {
+    "_doc": {
+      "_section": "通知",
+      "toast_enabled": "OS トースト通知の有効/無効",
+      "taskbar_flash_enabled": "タスクバー点滅の有効/無効",
+      "debounce_ms": "通知デバウンス間隔 (ms)",
+      "running_threshold_ms": "running 状態の判定閾値 (ms)",
+      "waiting_recovery_threshold_ms": "waiting 復帰の判定閾値 (ms)",
+      "error_recovery_threshold_ms": "error 復帰の判定閾値 (ms)",
+      "ctrlc_window_ms": "Ctrl+C 検出の時間ウィンドウ (ms)"
+    },
+    "toast_enabled": true,
+    "taskbar_flash_enabled": true,
+    "debounce_ms": 3000,
+    "running_threshold_ms": 3000,
+    "waiting_recovery_threshold_ms": 1500,
+    "error_recovery_threshold_ms": 1500,
+    "ctrlc_window_ms": 1000
+  },
+  "logging": {
+    "_doc": {
+      "_section": "ログ",
+      "level": "ログレベル (DEBUG / INFO / WARNING / ERROR)。app/logs/YYYYMMDD_agent_watch.log とコンソールに適用",
+      "pty_output_log": "PTY 出力の生ログ記録。有効にすると app/logs/YYYYMMDD_pty_output.log に記録。ファイルサイズが大きくなるため常時有効化は非推奨",
+      "session_recording": "セッション記録。有効にすると app/data/recording/ に状態遷移イベントをタイムスタンプ付きで記録"
+    },
+    "level": "INFO",
+    "pty_output_log": true,
+    "session_recording": true
+  },
+  "status_colors": {
+    "_doc": {
+      "_section": "状態カラー (Catppuccin Mocha テーマに準拠)",
+      "running": "エージェント実行中",
+      "waiting": "ユーザー入力待ち",
+      "error": "エラー検出時",
+      "idle": "未検出・アイドル"
+    },
+    "running": "#a6e3a1",
+    "waiting": "#f9e2af",
+    "error": "#f38ba8",
+    "idle": "#cdd6f4"
+  }
+}

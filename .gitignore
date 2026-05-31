@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+
+# Virtual environment
+app/.venv/
+.venv/
+venv/
+env/
+
+# Application data (user-specific)
+app/data/
+app/logs/
+docs/specification/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Development files
+.claude/
+99_old/
+references/
+AGENTS.md
+CLAUDE.md
+MODIFICATION_HISTORY.md
+DECISION_LOG.md

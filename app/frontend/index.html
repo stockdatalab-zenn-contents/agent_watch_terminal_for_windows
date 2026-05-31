@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Watch Terminal</title>
+
+  <!-- xterm.js 5.3.0 (ローカル: lib/ 配下) -->
+  <link rel="stylesheet" href="lib/xterm/xterm.css">
+  <script src="lib/xterm/xterm.js"></script>
+
+  <!-- xterm addons -->
+  <script src="lib/xterm-addon-fit/xterm-addon-fit.js"></script>
+  <script src="lib/xterm-addon-web-links/xterm-addon-web-links.js"></script>
+  <script src="lib/xterm-addon-serialize/xterm-addon-serialize.js"></script>
+
+  <!-- marked.js 9.1.0 -->
+  <script src="lib/marked/marked.min.js"></script>
+
+  <!-- Local CSS -->
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/terminal.css">
+  <link rel="stylesheet" href="css/sidebar.css">
+  <link rel="stylesheet" href="css/scrollbar.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Left sidebar -->
+    <div id="sidebar">
+
+      <!-- セッション一覧 (accordion) -->
+      <div class="accordion-panel" id="session-panel">
+        <div class="accordion-header" id="session-header">
+          <span class="accordion-chevron"></span>
+          <span class="accordion-title">セッション</span>
+          <button id="add-session-btn" title="新規セッション">+</button>
+        </div>
+        <div class="accordion-body" id="session-list-container">
+          <div id="session-list"></div>
+        </div>
+      </div>
+
+      <!-- パネル間リサイズハンドル -->
+      <div id="panel-resize-handle"></div>
+
+      <!-- ファイルエクスプローラ (accordion) -->
+      <div class="accordion-panel" id="file-panel">
+        <div class="accordion-header" id="file-header">
+          <span class="accordion-chevron"></span>
+          <span class="accordion-title">ファイル</span>
+          <button id="sort-explorer-btn" title="並び替え">A&#x2193;</button>
+          <button id="refresh-explorer-btn" title="再読み込み">&#x21bb;</button>
+        </div>
+        <div class="accordion-body" id="file-explorer-container">
+          <div id="file-explorer"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar resize handle -->
+    <div id="sidebar-resize-handle"></div>
+
+    <!-- Main terminal area -->
+    <div id="main">
+      <div id="terminal-container"></div>
+    </div>
+  </div>
+
+  <!-- ファイルビューア モーダル（マルチペイン） -->
+  <div id="fv-overlay" class="hidden">
+    <div id="fv-panel" tabindex="-1">
+      <div id="fv-header">
+        <span id="fv-title">ファイルビューア</span>
+        <button id="fv-close-all-btn" title="全て閉じる">&#x2715;</button>
+      </div>
+      <div id="fv-panes">
+        <!-- FileViewerModal が動的にペインを追加 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- シャットダウンオーバーレイ -->
+  <div id="shutdown-overlay" class="hidden">
+    <div class="shutdown-message">終了処理中...</div>
+  </div>
+
+  <!-- Global functions called from Python via evaluate_js -->
+  <script>
+    /**
+     * Python backend から PTY 出力を受け取るコールバック。
+     * terminal_manager.js が実装を上書きする想定。
+     */
+    window.onPtyOutput = function(sessionId, data) {
+      // terminal_manager.js で上書きされる
+    };
+
+    /**
+     * Python backend からステータス変更通知を受け取るコールバック。
+     * app.js または session_ui.js が実装を上書きする想定。
+     */
+    window.onStatusChange = function(data) {
+      // app.js で上書きされる
+    };
+
+    /**
+     * Python backend から cwd 変更通知を受け取るコールバック。
+     * app.js が実装を上書きする想定。
+     */
+    window.onCwdChange = function(sessionId, newCwd) {
+      // app.js で上書きされる
+    };
+  </script>
+
+  <!-- Local JS (load order matters) -->
+  <script src="js/app.js"></script>
+  <script src="js/terminal_manager.js"></script>
+  <script src="js/session_ui.js"></script>
+  <script src="js/file_explorer_ui.js"></script>
+  <script src="js/file_viewer_pane.js"></script>
+  <script src="js/file_viewer_modal.js"></script>
+  <script src="js/context_menu.js"></script>
+  <script src="js/resize_handler.js"></script>
+  <script src="js/scrollbar.js"></script>
+</body>
+</html>

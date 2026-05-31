@@ -1,0 +1,6 @@
+pywebview>=5.0
+pywinpty>=2.0
+winotify>=1.1
+pyperclip>=1.8
+markdown>=3.5
+Pillow>=10.0

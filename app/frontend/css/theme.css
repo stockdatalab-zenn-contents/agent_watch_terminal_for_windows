@@ -1,0 +1,108 @@
+/* ============================================================
+   theme.css – Catppuccin Mocha palette & base resets
+   Agent Watch Terminal
+   ============================================================ */
+
+/* ── Palette & design tokens ─────────────────────────────── */
+:root {
+  /* Catppuccin Mocha palette */
+  --ctp-rosewater: #f5e0dc;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink: #f5c2e7;
+  --ctp-mauve: #cba6f7;
+  --ctp-red: #f38ba8;
+  --ctp-maroon: #eba0ac;
+  --ctp-peach: #fab387;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-sapphire: #74c7ec;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext1: #bac2de;
+  --ctp-subtext0: #a6adc8;
+  --ctp-overlay2: #9399b2;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay0: #6c7086;
+  --ctp-surface2: #585b70;
+  --ctp-surface1: #45475a;
+  --ctp-surface0: #313244;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+
+  /* Status colors */
+  --status-running: #a6e3a1;
+  --status-waiting: #f9e2af;
+  --status-error: #f38ba8;
+  --status-idle: #cdd6f4;
+
+  /* UI sizing */
+  --sidebar-width: 220px;
+  --sidebar-min-width: 150px;
+  --sidebar-max-width: 400px;
+  --font-family: 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Consolas', 'Courier New', monospace;
+  --font-size: 13px;
+}
+
+/* ── Base resets ──────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--ctp-base);
+  color: var(--ctp-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(88, 91, 112, 0.5);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ctp-mantle);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ctp-surface1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ctp-surface2);
+}
+
+/* ── Utility classes ─────────────────────────────────────── */
+.hidden {
+  display: none !important;
+}
+
+.unread {
+  font-weight: 700;
+}
+
+/* ── GPU なし環境向け: transition/animation 無効化 ───────── */
+.reduced-motion,
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+}
