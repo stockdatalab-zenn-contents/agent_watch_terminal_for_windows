@@ -86,8 +86,8 @@
       "session_recording": "セッション記録。有効にすると app/data/recording/ に状態遷移イベントをタイムスタンプ付きで記録"
     },
     "level": "INFO",
-    "pty_output_log": true,
-    "session_recording": true
+    "pty_output_log": false,
+    "session_recording": false
   },
   "status_colors": {
     "_doc": {
