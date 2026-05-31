@@ -41,7 +41,7 @@ AGENTS: dict[str, AgentDict] = {
         "name": "Claude Code",
         "gate_patterns": [
             r"Claude Code",
-            r"claude-code",
+            # r"claude-code",
             r"╭.*Claude",
         ],
         "status_patterns": {
@@ -78,8 +78,8 @@ AGENTS: dict[str, AgentDict] = {
         "name": "Copilot CLI",
         "gate_patterns": [
             r"GitHub Copilot",
-            r"gh copilot",
-            r"copilot-cli",
+            # r"gh copilot",
+            # r"copilot-cli",
             r"Copilot v\d+\.\d+",  # TUI 起動バナー（可視テキスト）
         ],
         "status_patterns": {
@@ -97,8 +97,7 @@ AGENTS: dict[str, AgentDict] = {
     "bob": {
         "name": "Bob",
         "gate_patterns": [
-            r"bob ",
-            r"Bob AI",
+            r"Bob ",
             r"Sandbox mode",              # bob ステータスライン（Disabled/Enabled）
             r"Enter your prompt, / for",  # bob プロンプトテンプレート
         ],
