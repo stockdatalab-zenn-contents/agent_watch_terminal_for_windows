@@ -157,6 +157,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F06-02 | | 保存・破棄 | 編集内容の保存ボタン・破棄ボタン | `frontend/js/file_viewer_pane.js` |
 | F06-02 | | 未保存表示 | 未保存変更の視覚的インジケータ | `frontend/js/file_viewer_pane.js` |
 | F06-03 | Markdown プレビュー | プレビュー描画 | クライアント側 marked.js で Markdown → HTML 変換（fenced_code / tables 対応） | `frontend/js/file_viewer_pane.js` |
+| F06-03 | | 外部リンク | プレビュー内の http(s) リンククリック時、ウィンドウ内ナビゲーションを阻止し OS 既定ブラウザで開く | `frontend/js/file_viewer_pane.js`, `api.py` |
 
 ---
 
@@ -357,6 +358,7 @@ PTY バイトデータ受信
 | | `resize_terminal(session_id, cols, rows)` | JS→PY | ターミナルリサイズ |
 | ファイル | `list_files(path)` | JS→PY | ディレクトリ一覧 |
 | | `open_file(path)` | JS→PY | OS でファイルを開く |
+| | `open_url(url)` | JS→PY | URL を OS 既定ブラウザで開く |
 | | `read_file_content(path)` | JS→PY | テキスト読取 |
 | | `read_image_base64(path)` | JS→PY | 画像を Base64 data URI で読取（5MB 上限） |
 | | `save_file(path, content)` | JS→PY | テキスト保存 |

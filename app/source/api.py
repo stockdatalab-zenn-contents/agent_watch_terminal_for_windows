@@ -383,6 +383,32 @@ class Api:
             logger.exception("open_file に失敗: path=%s", path)
             return False
 
+    def open_url(self, url: str) -> bool:
+        """URL を OS 既定ブラウザで開く。
+
+        マークダウンプレビュー内のリンククリック時に使用する。
+        pywebview ウィンドウ内ナビゲーションを防止し、外部ブラウザに委譲する。
+
+        Parameters
+        ----------
+        url : str
+            開く URL。
+
+        Returns
+        -------
+        bool
+            起動に成功した場合 ``True``。
+        """
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+            logger.debug("URL を外部ブラウザで開く: %s", url)
+            return True
+        except Exception:
+            logger.exception("open_url に失敗: url=%s", url)
+            return False
+
     def read_file_content(self, path: str) -> str:
         """ファイルの生テキストを返す。
 

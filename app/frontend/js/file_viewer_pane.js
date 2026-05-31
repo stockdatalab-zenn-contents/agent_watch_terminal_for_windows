@@ -167,6 +167,17 @@ const FileViewerPane = {
     // --- イベントリスナー ---
     var self = this;
 
+    // プレビュー内リンクのクリックをインターセプトし外部ブラウザで開く
+    preview.addEventListener('click', function (e) {
+      var link = e.target.closest('a');
+      if (link && link.href && /^https?:/i.test(link.href)) {
+        e.preventDefault();
+        if (window.pywebview && window.pywebview.api) {
+          window.pywebview.api.open_url(link.href);
+        }
+      }
+    });
+
     modeBtn.addEventListener('click', function () {
       self.toggleMode(pane);
     });
