@@ -97,7 +97,7 @@ AGENTS: dict[str, AgentDict] = {
     "bob": {
         "name": "Bob",
         "gate_patterns": [
-            r"Bob ",
+            r"Bob (?!goes to sleep)",  # 終了メッセージ「Bob goes to sleep」を除外
             r"Sandbox mode",              # bob ステータスライン（Disabled/Enabled）
             r"Enter your prompt, / for",  # bob プロンプトテンプレート
         ],
