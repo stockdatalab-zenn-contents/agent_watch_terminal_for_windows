@@ -27,4 +27,4 @@
 
 - 上記すべてのライセンスは、本プロジェクトが採用する MIT License と互換性がある。
 - フロントエンドライブラリは `app/frontend/lib/` にバンドルされている。詳細は `app/frontend/lib/LICENSE_THIRD_PARTY.md` を参照。
-- 本ターミナル内で使用する外部AIツール（Claude Code、Codex CLI、GitHub Copilot CLI、Bob Shell）は、本プロジェクトのライセンス範囲**外**。各ツールの利用規約に従うこと。
+- 本ターミナル内で使用する外部AIツール（Claude Code、Codex CLI、GitHub Copilot CLI、Bob Shell、opencode）は、本プロジェクトのライセンス範囲**外**。各ツールの利用規約に従うこと。

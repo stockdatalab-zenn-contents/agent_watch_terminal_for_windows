@@ -38,7 +38,10 @@ from source.pty.pty_manager import PtyManager  # noqa: E402
 from source.session.session_store import SessionStore  # noqa: E402
 from source.session.session_manager import SessionManager  # noqa: E402
 from source.detection.agent_detector import AgentDetector  # noqa: E402
-from source.detection.agent_patterns import AGENTS  # noqa: E402
+from source.detection.agent_patterns import (  # noqa: E402
+    AGENTS,
+    requires_agent_session_id,
+)
 from source.notification.toast_notifier import ToastNotifier  # noqa: E402
 from source.notification.taskbar_flasher import TaskbarFlasher  # noqa: E402
 from source.notification.notification_manager import NotificationManager  # noqa: E402
@@ -160,9 +163,13 @@ def _on_status_change(
     # 1.5. agent_key の追跡（永続化用）
     agent_key = _agent_detector.get_agent(session_id)
     _session_manager.set_agent_key(session_id, agent_key)
-    # ゲート閉鎖時は命名済みフラグもクリア
+    # ゲート開放時刻を記録（終了時のセッション突合で下限として使う）
+    if event_type == "gate_opened":
+        _session_manager.set_agent_started_at(session_id)
+    # ゲート閉鎖時は命名済みフラグと開放時刻をクリア
     if event_type == "gate_closed":
         _session_manager.set_agent_session_named(session_id, False)
+        _session_manager.set_agent_started_at(session_id, "")
 
     # 2. 非アクティブセッションは未読バッジ
     active_id = _session_manager.get_active_session_id()
@@ -443,7 +450,19 @@ def _send_rename_commands_on_shutdown() -> None:
             continue
 
         agent_info = AGENTS.get(agent_key)
-        if not agent_info or "rename_command" not in agent_info:
+        if not agent_info:
+            continue
+
+        # rename コマンドを持たない AI ツール（opencode 等）は命名手順が不要。
+        # 命名済み扱いにしないと次回起動時の自動復元がスキップされるため、
+        # ここでフラグを立てて送信対象から外す。
+        if not agent_info.get("rename_command"):
+            _session_manager.set_agent_session_named(sid, True)
+            logger.debug(
+                "終了時 rename 不要 (rename 非対応): session=%s, agent=%s",
+                sid,
+                agent_key,
+            )
             continue
 
         # AI ツールがプロンプトにいる場合のみ送信
@@ -603,8 +622,9 @@ def _schedule_auto_resume() -> None:
 
     agent_session_named=True のセッションに対して、
     agent_key に応じた resume コマンドを直接シェルに送信する。
-    - claude/copilot: name を使って復元（例: claude --resume "name"）
-    - codex/bob: agent_session_id を使って復元（例: codex resume <id>）
+    復元方式はエージェント定義の ``session_match`` に従う。
+    - name ベース (claude/copilot): 例 ``claude --resume "name"``
+    - ID ベース (codex/bob/opencode): 例 ``codex resume <id>``
     """
     for session in _session_manager.get_sessions():
         agent_key = session.get("agent_key")
@@ -625,9 +645,9 @@ def _schedule_auto_resume() -> None:
             )
             continue
 
-        # codex/bob は agent_session_id が必須
+        # ID ベース復元のエージェントは agent_session_id が必須
         agent_session_id = session.get("agent_session_id", "")
-        if agent_key in ("codex", "bob") and not agent_session_id:
+        if requires_agent_session_id(agent_key) and not agent_session_id:
             logger.warning(
                 "自動復元スキップ (agent_session_id なし): "
                 "session=%s, agent=%s",
@@ -641,6 +661,10 @@ def _schedule_auto_resume() -> None:
         resume_cmd = agent_info["resume_command"].format(
             name=name, agent_session_id=agent_session_id,
         )
+
+        # 前回起動時の値が下限として残らないよう、この起動の時刻へ更新する。
+        # ゲート開放時にも設定されるが、開放前にアプリが落ちた場合の保険。
+        _session_manager.set_agent_started_at(sid)
 
         # シェル起動待ち後に resume コマンドを直接送信
         timer = threading.Timer(

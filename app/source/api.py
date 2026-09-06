@@ -19,7 +19,10 @@ from typing import TYPE_CHECKING
 import pyperclip
 
 from source.config import settings_manager
-from source.detection.agent_patterns import AGENTS
+from source.detection.agent_patterns import (
+    AGENTS,
+    requires_agent_session_id,
+)
 
 if TYPE_CHECKING:
     from source.session.session_manager import SessionManager
@@ -516,27 +519,47 @@ class Api:
             session_id → ANSI 装飾付きヒントテキスト。
         """
         hints: dict[str, str] = {}
-        try:
-            for session in self._session_manager.get_sessions():
+        for session in self._session_manager.get_sessions():
+            # 1 セッションの失敗で後続のヒントを失わないよう個別に保護
+            try:
                 agent_key = session.get("agent_key")
                 if not agent_key:
-                    continue
-                # 命名済み = 自動復元対象 → ヒント不要
-                if session.get("agent_session_named"):
                     continue
                 agent_info = AGENTS.get(agent_key)
                 if not agent_info:
                     continue
+
+                agent_session_id = session.get("agent_session_id", "")
+                # 自動復元されるセッションはヒント不要。ただし ID ベース
+                # 復元のエージェントは agent_session_id が取れていないと
+                # 自動復元がスキップされるため、命名済みでも対象に含める。
+                auto_restorable = bool(
+                    session.get("agent_session_named")
+                ) and not (
+                    requires_agent_session_id(agent_key)
+                    and not agent_session_id
+                )
+                if auto_restorable:
+                    continue
+
                 name = session["name"]
                 start = agent_info["start_command"]
-                resume = agent_info["resume_command"].format(name=name)
+                # ID ベース復元のエージェントは {agent_session_id} を含むため
+                # 両方のプレースホルダを必ず渡す。ID 未取得時は
+                # プレースホルダを表示して手動入力を促す。
+                resume = agent_info["resume_command"].format(
+                    name=name,
+                    agent_session_id=agent_session_id or "<session-id>",
+                )
                 hints[session["id"]] = (
                     f"\r\n\x1b[33m[Agent Watch] "
                     f"前回 {agent_info['name']} が動作していました\x1b[0m"
                     f"\r\n\x1b[33m復元: {start} → {resume}\x1b[0m\r\n"
                 )
-        except Exception:
-            logger.exception("get_restore_hints に失敗")
+            except Exception:
+                logger.exception(
+                    "復元ヒントの生成に失敗: session=%s", session.get("id")
+                )
         return hints
 
     # ==================================================================

@@ -1,6 +1,6 @@
 # 1. What is Agent Watch Terminal?
 Agent Watch Terminal is a lightweight tool focused on status detection and notifications, designed to reduce the time spent watching AI tool output.
-It automatically detects the status of AI tools (Claude Code / Codex CLI / GitHub Copilot CLI / Bob Shell) and notifies you through color indicators and notifications. It is a desktop application for Windows.
+It automatically detects the status of AI tools (Claude Code / Codex CLI / GitHub Copilot CLI / Bob Shell / opencode) and notifies you through color indicators and notifications. It is a desktop application for Windows.
 
 # 2. Usage
 ## Setup
@@ -75,7 +75,7 @@ Support for zsh (`precmd_functions`) and fish (`fish_prompt`) would be needed, b
 # 5. License
 This project is licensed under the MIT License.
 
-However, the external tools used by this project, such as "Claude Code", "Codex CLI", "GitHub Copilot CLI", and "Bob Shell", are outside the scope of this license. Please follow the terms of use for each tool.
+However, the external tools used by this project, such as "Claude Code", "Codex CLI", "GitHub Copilot CLI", "Bob Shell", and "opencode", are outside the scope of this license. Please follow the terms of use for each tool.
 
 
 # Appendix. Design Philosophy and Policy

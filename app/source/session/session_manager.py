@@ -10,12 +10,19 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from source.session.session_store import SessionStore, create_default_session
 from source.session.session_id_collector import save_session_ids
-from source.detection.agent_patterns import AGENTS
+from source.detection.agent_patterns import (
+    AGENTS,
+    SESSION_MATCH_CWD_LATEST,
+    SESSION_MATCH_NAME_CWD,
+    SESSION_MATCH_NONE,
+    get_session_match_mode,
+)
 
 if TYPE_CHECKING:
     from source.pty.pty_manager import PtyManager
@@ -331,6 +338,32 @@ class SessionManager:
         if session is not None:
             session["agent_session_named"] = named
 
+    def set_agent_started_at(
+        self, session_id: str, iso_timestamp: str | None = None
+    ) -> None:
+        """AI ツールのゲート開放時刻を設定する。
+
+        終了時のセッション ID 突合で「この起動より後に更新された
+        セッションのみを候補にする」下限として使う。
+
+        Parameters
+        ----------
+        session_id : str
+            対象セッション ID。
+        iso_timestamp : str | None
+            ISO 8601 (UTC) 文字列。``None`` なら現在時刻。
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
+        if iso_timestamp is None:
+            iso_timestamp = datetime.now(timezone.utc).isoformat()
+        session["agent_started_at"] = iso_timestamp
+        logger.debug(
+            "ゲート開放時刻を記録: session=%s, at=%s",
+            session_id, iso_timestamp,
+        )
+
     # ------------------------------------------------------------------
     # unread badge
     # ------------------------------------------------------------------
@@ -368,7 +401,7 @@ class SessionManager:
 
         永続化対象は ``id``, ``name``, ``cwd``, ``order`` に加え、
         AI ツール復元用の ``agent_key``, ``agent_session_named``,
-        ``agent_session_id``。
+        ``agent_session_id``, ``agent_started_at``。
         ランタイム状態 (``status``, ``agent``, ``unread``) は保存しない。
         """
         persistable = []
@@ -387,6 +420,9 @@ class SessionManager:
                 )
                 entry["agent_session_id"] = s.get(
                     "agent_session_id", ""
+                )
+                entry["agent_started_at"] = s.get(
+                    "agent_started_at", ""
                 )
             persistable.append(entry)
         self._store.save(persistable)
@@ -411,10 +447,16 @@ class SessionManager:
     def _populate_agent_session_ids(self, data_dir: str) -> None:
         """session_ids.json を生成し、該当セッションに agent_session_id を設定する。
 
-        codex/bob のセッション情報を収集して session_ids.json に書き出し、
-        sessions.json の各エントリの name と cwd が一致するものに
-        agent_session_id を付与する。
-        claude/copilot は name で復元するため空文字のまま。
+        AI ツール側のセッション情報を収集して session_ids.json に書き出し、
+        エージェント定義の ``session_match`` に従って agent_session_id を
+        付与する。
+
+        - ``none`` (claude/copilot): name で復元するため空文字のまま
+        - ``name_cwd`` (codex/bob): name と cwd の完全一致で突合
+        - ``cwd_latest`` (opencode): 2 段階で割り当てる。まず前回取得済みの
+          ID がまだ存在するセッションへ優先的に予約し（同一 cwd の複数タブで
+          ID が入れ替わるのを防ぐ）、残りへ cwd 一致かつゲート開放後に
+          更新されたもののうち最終更新が新しい順に割当
 
         Parameters
         ----------
@@ -427,26 +469,86 @@ class SessionManager:
             logger.exception("session_ids.json の生成に失敗")
             return
 
-        for s in self._sessions.values():
-            agent_key = s.get("agent_key")
-            if agent_key not in ("codex", "bob"):
-                # claude/copilot は name で復元 — 空文字を設定
+        # 割当済みの ID — cwd_latest 方式で同一 cwd への重複割当を防ぐ
+        assigned_ids: set[str] = set()
+        # 第 1 パスで確定したアプリ側セッション ID
+        resolved: set[str] = set()
+
+        # cwd_latest は更新の新しい順に上から割り当てるため、
+        # 走査順をタブ表示順（order 昇順）に揃える
+        ordered = self.get_sessions()
+
+        # --- 第 1 パス: 前回取得済みの ID がまだ有効なら最優先で予約 ---
+        # 同一 cwd に複数タブがある場合、更新の新しい順だけで割り当てると
+        # タブ間で ID が入れ替わるため、自タブの ID を先に押さえる。
+        for s in ordered:
+            agent_key = s.get("agent_key") or ""
+            if get_session_match_mode(agent_key) != SESSION_MATCH_CWD_LATEST:
+                continue
+            try:
+                kept = self._keep_existing_id(
+                    session_ids,
+                    agent_key,
+                    s.get("cwd", ""),
+                    s.get("agent_session_id", ""),
+                    assigned_ids,
+                )
+            except Exception:
+                logger.exception(
+                    "既存 agent_session_id の確認に失敗: session=%s", s["id"]
+                )
+                continue
+            if kept:
+                s["agent_session_id"] = kept
+                assigned_ids.add(kept)
+                resolved.add(s["id"])
+
+        # --- 第 2 パス: 残りを突合方式に従って割り当てる ---
+        for s in ordered:
+            if s["id"] in resolved:
+                continue
+
+            agent_key = s.get("agent_key") or ""
+            match_mode = get_session_match_mode(agent_key)
+
+            if match_mode == SESSION_MATCH_NONE:
+                # name で復元するエージェント — 空文字を設定
                 s["agent_session_id"] = ""
                 continue
 
-            # name と cwd が一致するエントリを検索
-            matched_id = ""
-            for sid_entry in session_ids:
-                if (
-                    sid_entry.get("agent_key") == agent_key
-                    and sid_entry.get("name") == s.get("name")
-                    and sid_entry.get("cwd") == s.get("cwd")
-                ):
-                    matched_id = sid_entry.get("agent_session_id", "")
-                    break
+            try:
+                if match_mode == SESSION_MATCH_CWD_LATEST:
+                    matched_id = self._match_by_cwd_latest(
+                        session_ids,
+                        agent_key,
+                        s.get("cwd", ""),
+                        assigned_ids,
+                        s.get("agent_started_at", ""),
+                    )
+                elif match_mode == SESSION_MATCH_NAME_CWD:
+                    matched_id = self._match_by_name_cwd(
+                        session_ids,
+                        agent_key,
+                        s.get("name", ""),
+                        s.get("cwd", ""),
+                    )
+                else:
+                    # 未知の突合方式 — 黙って name_cwd へ倒さず原因を残す
+                    logger.error(
+                        "未知の session_match: agent=%s, mode=%s",
+                        agent_key, match_mode,
+                    )
+                    matched_id = ""
+            except Exception:
+                # 1 セッションの失敗で終了処理全体を止めない
+                logger.exception(
+                    "agent_session_id の突合に失敗: session=%s", s["id"]
+                )
+                matched_id = ""
 
             s["agent_session_id"] = matched_id
             if matched_id:
+                assigned_ids.add(matched_id)
                 logger.info(
                     "agent_session_id 設定: session=%s, agent=%s, id=%s",
                     s["id"], agent_key, matched_id,
@@ -456,6 +558,234 @@ class SessionManager:
                     "agent_session_id が見つからない: session=%s, agent=%s, name=%s",
                     s["id"], agent_key, s.get("name"),
                 )
+
+    @staticmethod
+    def _match_by_name_cwd(
+        session_ids: list[dict],
+        agent_key: str,
+        name: str,
+        cwd: str,
+    ) -> str:
+        """name と cwd の完全一致で agent_session_id を検索する。
+
+        Parameters
+        ----------
+        session_ids : list[dict]
+            収集済みセッション情報。
+        agent_key : str
+            対象エージェントキー。
+        name : str
+            アプリ側セッション名。
+        cwd : str
+            アプリ側作業ディレクトリ。
+
+        Returns
+        -------
+        str
+            一致した agent_session_id。見つからない場合は空文字。
+
+        Notes
+        -----
+        cwd は既存挙動を維持するため完全一致で比較する
+        （``_match_by_cwd_latest`` の正規化比較とは非対称）。
+        """
+        for sid_entry in session_ids:
+            if (
+                sid_entry.get("agent_key") == agent_key
+                and sid_entry.get("name") == name
+                and sid_entry.get("cwd") == cwd
+            ):
+                return sid_entry.get("agent_session_id", "")
+        return ""
+
+    @staticmethod
+    def _match_by_cwd_latest(
+        session_ids: list[dict],
+        agent_key: str,
+        cwd: str,
+        assigned_ids: set[str],
+        started_at: str = "",
+    ) -> str:
+        """cwd 一致のうち最終更新が新しいものを検索する。
+
+        セッション名を任意に付けられない AI ツール（opencode 等）向け。
+        ``session_ids`` は収集側で更新日時の降順に並んでいる前提。
+        既に他セッションへ割り当てた ID は除外する。
+
+        ``started_at`` を与えると、それ以降に更新されたセッションのみを
+        候補にする。AI ツールを起動しただけでメッセージを送らなかった
+        場合に、同じ cwd の古いセッションを誤って復元しないための下限。
+
+        Parameters
+        ----------
+        session_ids : list[dict]
+            収集済みセッション情報。
+        agent_key : str
+            対象エージェントキー。
+        cwd : str
+            アプリ側作業ディレクトリ。
+        assigned_ids : set[str]
+            割当済み agent_session_id の集合。
+        started_at : str
+            ゲート開放時刻の ISO 8601 文字列。空なら下限なし。
+
+        Returns
+        -------
+        str
+            一致した agent_session_id。見つからない場合は空文字。
+        """
+        if not cwd:
+            return ""
+
+        target = SessionManager._normalize_cwd(cwd)
+        for sid_entry in session_ids:
+            if sid_entry.get("agent_key") != agent_key:
+                continue
+            if SessionManager._normalize_cwd(sid_entry.get("cwd", "")) != target:
+                continue
+            if not SessionManager._is_updated_after(
+                sid_entry.get("updated_at", ""), started_at
+            ):
+                continue
+            candidate = sid_entry.get("agent_session_id", "")
+            if candidate and candidate not in assigned_ids:
+                return candidate
+        return ""
+
+    @staticmethod
+    def _keep_existing_id(
+        session_ids: list[dict],
+        agent_key: str,
+        cwd: str,
+        current_id: str,
+        assigned_ids: set[str],
+    ) -> str:
+        """前回取得済みの agent_session_id を、まだ有効なら維持する。
+
+        AI ツール側に同じ ID のセッションが同じ cwd で残っている場合のみ
+        採用する。既に他セッションへ割り当て済みの ID は採用しない。
+
+        Parameters
+        ----------
+        session_ids : list[dict]
+            収集済みセッション情報。
+        agent_key : str
+            対象エージェントキー。
+        cwd : str
+            アプリ側作業ディレクトリ。
+        current_id : str
+            前回保存された agent_session_id。
+        assigned_ids : set[str]
+            割当済み agent_session_id の集合。
+
+        Returns
+        -------
+        str
+            維持する agent_session_id。該当しない場合は空文字。
+        """
+        if not current_id or current_id in assigned_ids:
+            return ""
+
+        target = SessionManager._normalize_cwd(cwd)
+        for sid_entry in session_ids:
+            if sid_entry.get("agent_key") != agent_key:
+                continue
+            if sid_entry.get("agent_session_id", "") != current_id:
+                continue
+            if SessionManager._normalize_cwd(sid_entry.get("cwd", "")) != target:
+                continue
+            logger.info(
+                "agent_session_id を維持（更新なし）: agent=%s, id=%s",
+                agent_key, current_id,
+            )
+            return current_id
+        return ""
+
+    @staticmethod
+    def _is_updated_after(updated_at: object, started_at: object) -> bool:
+        """``updated_at`` が ``started_at`` 以降かどうかを判定する。
+
+        ``started_at`` が空（下限なし）なら常に ``True``。
+        いずれかが ISO 8601 として解釈できない場合は ``False`` を返し、
+        誤った復元を避ける（判定できないものは候補にしない）。
+
+        Parameters
+        ----------
+        updated_at : object
+            AI ツール側セッションの最終更新時刻 (ISO 8601)。
+        started_at : object
+            ゲート開放時刻 (ISO 8601)。空なら下限なし。
+
+        Returns
+        -------
+        bool
+            候補として採用してよいなら ``True``。
+        """
+        if not started_at:
+            return True
+
+        base = SessionManager._parse_iso(started_at)
+        target = SessionManager._parse_iso(updated_at)
+        if base is None or target is None:
+            logger.warning(
+                "更新時刻の比較に失敗: updated_at=%r, started_at=%r",
+                updated_at, started_at,
+            )
+            return False
+        return target >= base
+
+    @staticmethod
+    def _parse_iso(value: object) -> datetime | None:
+        """ISO 8601 文字列を timezone 付き datetime へ変換する。
+
+        タイムゾーン指定がない文字列は UTC とみなす。
+        sessions.json が手編集・破損などで文字列以外を持っていても
+        例外を投げない。
+
+        Parameters
+        ----------
+        value : object
+            ISO 8601 文字列。文字列以外は解釈不能として扱う。
+
+        Returns
+        -------
+        datetime | None
+            変換結果。解釈できない場合は ``None``。
+        """
+        if not isinstance(value, str) or not value:
+            return None
+        text = value.strip()
+        # 末尾 Z 表記を +00:00 へ寄せる
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @staticmethod
+    def _normalize_cwd(path: str) -> str:
+        """cwd 比較用にパスを正規化する。
+
+        AI ツール側がスラッシュ区切り・大小文字違いで保持している場合に
+        備え、区切り文字と大小文字を揃える。
+
+        Parameters
+        ----------
+        path : str
+            正規化対象のパス。
+
+        Returns
+        -------
+        str
+            正規化済みパス。空文字はそのまま返す。
+        """
+        if not path:
+            return ""
+        return os.path.normcase(os.path.normpath(path))
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -469,7 +799,8 @@ class SessionManager:
         entry : dict
             ストアから読み込んだ永続データ (``id``, ``name``,
             ``cwd``, ``order``, ``agent_key``,
-            ``agent_session_named``)。
+            ``agent_session_named``, ``agent_session_id``,
+            ``agent_started_at``)。
 
         Returns
         -------
@@ -494,6 +825,7 @@ class SessionManager:
             "agent_key": agent_key,
             "agent_session_named": entry.get("agent_session_named", False),
             "agent_session_id": entry.get("agent_session_id", ""),
+            "agent_started_at": entry.get("agent_started_at", ""),
             # ランタイム専用フィールド
             "status": "idle",
             "agent": agent_name,

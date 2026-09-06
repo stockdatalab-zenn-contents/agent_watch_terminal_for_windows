@@ -36,6 +36,24 @@ ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(
 
 AgentDict = dict[str, Any]
 
+# ---------------------------------------------------------------------------
+# セッション ID 突合方式 (``session_match``)
+#
+# 終了時に収集した AI ツール側セッション情報と、アプリ側セッションを
+# どう突き合わせて ``agent_session_id`` を決めるかの区分。
+#
+#   SESSION_MATCH_NONE       : name で復元するため agent_session_id 不要
+#                              (claude / copilot)
+#   SESSION_MATCH_NAME_CWD   : name と cwd の完全一致で突合 (codex / bob)
+#   SESSION_MATCH_CWD_LATEST : cwd 一致のうち最終更新が新しい順に割当
+#                              (opencode) — セッション名を任意指定できず
+#                              name で突合できない AI ツール向け
+# ---------------------------------------------------------------------------
+
+SESSION_MATCH_NONE: str = "none"
+SESSION_MATCH_NAME_CWD: str = "name_cwd"
+SESSION_MATCH_CWD_LATEST: str = "cwd_latest"
+
 AGENTS: dict[str, AgentDict] = {
     "claude": {
         "name": "Claude Code",
@@ -52,6 +70,7 @@ AGENTS: dict[str, AgentDict] = {
             "error": [],
         },
         "ctrlc_to_close": 2,
+        "session_match": SESSION_MATCH_NONE,
         "start_command": "claude",
         "rename_command": "/rename {name}",
         "resume_command": 'claude --resume "{name}"',
@@ -70,6 +89,7 @@ AGENTS: dict[str, AgentDict] = {
             "error": [],
         },
         "ctrlc_to_close": 1,
+        "session_match": SESSION_MATCH_NAME_CWD,
         "start_command": "codex",
         "rename_command": "/rename {name}",
         "resume_command": "codex resume {agent_session_id}",
@@ -90,6 +110,7 @@ AGENTS: dict[str, AgentDict] = {
             "error": [],
         },
         "ctrlc_to_close": 2,
+        "session_match": SESSION_MATCH_NONE,
         "start_command": "copilot",
         "rename_command": "/rename {name}",
         "resume_command": 'copilot --resume="{name}"',
@@ -108,9 +129,61 @@ AGENTS: dict[str, AgentDict] = {
             "error": [],
         },
         "ctrlc_to_close": 2,
+        "session_match": SESSION_MATCH_NAME_CWD,
         "start_command": "bob",
         "rename_command": "/chat save {name}",
         "resume_command": "bob resume {agent_session_id}",
+    },
+    "opencode": {
+        "name": "opencode",
+        # 語間は \s+ で表現する。opencode の TUI はカーソル制御
+        # （CUF/CHA）で語を配置するため、strip_ansi 後の語間が
+        # 空白 1 文字とは限らず、リテラル空白だと取りこぼすため。
+        "gate_patterns": [
+            # 起動直後のホーム画面に出る入力欄プレースホルダ。
+            # 実際の表示は "Ask anything… \"...\"" で末尾が三点リーダ。
+            # 三点リーダまで含めることで、英語の散文や本リポジトリの
+            # ドキュメント中に現れる同じ語句へ反応しないようにする。
+            r"Ask\s+anything\s*(?:…|\.\.\.)",
+            # 権限確認ダイアログの見出し
+            r"Permission\s+required",
+            # 生成中に入力欄下部へ出る中断キーヒント
+            r"esc\s+interrupt",
+            # 復元・継続コマンドのシェルエコー。
+            # セッション復元時の画面には "Ask anything" が出ず
+            # 他のアンカーもカーソル制御で分断されるため、
+            # 打ち込まれたコマンド自体でゲートを開く。
+            #
+            # 誤検出を避けるため次の 3 点で絞り込む。
+            #   1. 行頭、またはシェルプロンプト末尾 (> $ #) の直後
+            #   2. --session/-s はセッション ID (ses_...) を伴う
+            #      → 文書中の "opencode --session <id>" 等に反応しない
+            #   3. --continue/-c は後続が語構成文字でない
+            #      → "--continue-on-error" に反応しない
+            r"(?:^|[>$#]\s*)opencode\s+"
+            r"(?:(?:--session|-s)\s+ses_[A-Za-z0-9]+"
+            r"|(?:--continue|-c)(?![\w-]))",
+        ],
+        "status_patterns": {
+            "waiting": [
+                # 権限確認ダイアログ（Allow once / Allow always / Reject）
+                r"Permission\s+required",
+                r"Allow\s+once",
+                # 質問ダイアログの自由入力欄
+                r"Type\s+your\s+own\s+answer",
+            ],
+            "error": [],
+        },
+        # keybind の app_exit が "ctrl+c,ctrl+d,<leader>q" で、
+        # Ctrl+C 1 回で終了する（中断は Esc に割当）
+        "ctrlc_to_close": 1,
+        # opencode はセッション名を任意指定できず自動生成のため、
+        # name ではなく cwd + 最終更新で突合する
+        "session_match": SESSION_MATCH_CWD_LATEST,
+        "start_command": "opencode",
+        # /rename 相当のコマンドを持たないため rename_command は定義しない。
+        # 終了時の命名手順はスキップされ、命名済み扱いになる。
+        "resume_command": "opencode --session {agent_session_id}",
     },
 }
 
@@ -199,6 +272,51 @@ def get_agent_names() -> list[str]:
     Returns
     -------
     list[str]
-        Agent identifiers (e.g. ``["claude", "codex", "copilot", "bob"]``).
+        Agent identifiers
+        (e.g. ``["claude", "codex", "copilot", "bob", "opencode"]``).
     """
     return list(AGENTS.keys())
+
+
+def get_session_match_mode(agent_key: str) -> str:
+    """エージェントのセッション ID 突合方式を返す。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子 (``"claude"`` 等)。未登録キーも許容。
+
+    Returns
+    -------
+    str
+        ``SESSION_MATCH_NONE`` / ``SESSION_MATCH_NAME_CWD`` /
+        ``SESSION_MATCH_CWD_LATEST`` のいずれか。未登録・未指定は
+        ``SESSION_MATCH_NONE``。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return SESSION_MATCH_NONE
+    return agent.get("session_match", SESSION_MATCH_NONE)
+
+
+def requires_agent_session_id(agent_key: str) -> bool:
+    """resume に ``agent_session_id`` が必須かどうかを返す。
+
+    ``resume_command`` のテンプレートが ``{agent_session_id}`` を含むか
+    どうかで判定する。「どう突合するか」(``session_match``) と「復元に
+    ID が要るか」は別概念のため、突合方式からは推論しない。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。
+
+    Returns
+    -------
+    bool
+        ID ベースで復元するエージェントなら ``True``。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return False
+    return "{agent_session_id}" in agent.get("resume_command", "")

@@ -12,7 +12,7 @@
 ## 1. システム概要
 
 AIコーディングツール専用の「見守りターミナル」。
-通常のターミナルとして使用しながら、AIツール（Claude Code / Codex CLI / GitHub Copilot CLI / Bob Shell）の動作状態を自動判定し、色分け表示・デスクトップ通知で利用者に知らせるWindows デスクトップアプリケーション。
+通常のターミナルとして使用しながら、AIツール（Claude Code / Codex CLI / GitHub Copilot CLI / Bob Shell / opencode）の動作状態を自動判定し、色分け表示・デスクトップ通知で利用者に知らせるWindows デスクトップアプリケーション。
 
 ### 1.1 技術スタック
 
@@ -111,6 +111,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F03-05 | | Codex CLI | `codex` コマンド起動を検出 | `detection/agent_patterns.py` |
 | F03-05 | | GitHub Copilot CLI | `copilot` コマンド起動を検出 | `detection/agent_patterns.py` |
 | F03-05 | | Bob Shell | `bob` コマンド起動を検出 | `detection/agent_patterns.py` |
+| F03-05 | | opencode | `opencode` コマンド起動を検出。復元・継続コマンドのシェルエコー（`opencode --session/-s/--continue/-c`）もゲートパターンに追加し、復元起動画面で入力欄プレースホルダ等の既存アンカーが表示されずゲートが開かない不具合に対応。散文や本リポジトリのドキュメント自身への誤検出（実測 11 件）を受け、行頭/シェルプロンプト末尾限定・セッション ID 必須・入力欄プレースホルダの三点リーダ必須へ厳格化（誤マッチ 0 の組合せを採用） | `detection/agent_patterns.py` |
 
 ---
 
@@ -166,10 +167,11 @@ AIコーディングツール専用の「見守りターミナル」。
 | ID | 中機能 | 小機能 | 概要 | 関連モジュール |
 |----|--------|--------|------|----------------|
 | F07-01 | セッション名付与 | 自動リネーム | アプリ終了時に、AI ツールのセッション名を取得するリネームコマンドを各 PTY へ送信 | `main.py` |
-| F07-02 | セッション ID 収集 | CLI 問合せ | アプリ終了時に AI ツールの CLI から稼働中セッション ID を収集 | `session/session_id_collector.py` |
-| F07-02 | | セッション照合 | セッション名・CWD で sessions.json と照合し、`agent_session_id` を紐付け | `session/session_manager.py` |
-| F07-03 | 自動再開 | コマンド送信 | 起動時に `resume_command`（例: `claude --resume "{name}"`）を PTY へ送信し、前回セッションを復元 | `main.py` |
-| F07-03 | | 復元ヒント表示 | 自動再開不可の場合、手動復元プロンプト（コマンド文字列）をターミナルに表示 | `api.py` |
+| F07-01 | | リネーム不要判定 | `rename_command` 未定義の AI ツール（opencode 等）は命名不要として `agent_session_named` を即時 True 化 | `main.py` |
+| F07-02 | セッション ID 収集 | CLI 問合せ | アプリ終了時に AI ツールのローカルデータから稼働中セッション ID を収集（opencode は SQLite `opencode.db` を読取り専用参照、旧 JSON 形式へフォールバック） | `session/session_id_collector.py` |
+| F07-02 | | セッション照合 | エージェント定義の `session_match`（`none`/`name_cwd`/`cwd_latest`）に従い sessions.json と照合し `agent_session_id` を紐付け。cwd 一致のうち最終更新が新しい順に割当てる `cwd_latest`（opencode 向け）を追加し、旧来のハードコード分岐（codex/bob）を廃止。`cwd_latest` は 2 パス構成。第 1 パスで前回取得済み ID がまだ有効なセッションへ優先予約し、同一 cwd の複数タブ間で `agent_session_id` が入れ替わる不具合を防止。第 2 パスで残りをゲート開放時刻（`agent_started_at`）以降に更新されたもののうち最終更新が新しい順に割当 | `session/session_manager.py`, `detection/agent_patterns.py` |
+| F07-03 | 自動再開 | コマンド送信 | 起動時に `resume_command`（例: `claude --resume "{name}"` / ID ベースは `opencode --session {agent_session_id}`）を PTY へ送信し、前回セッションを復元 | `main.py`, `detection/agent_patterns.py` |
+| F07-03 | | 復元ヒント表示 | 自動再開不可の場合、手動復元プロンプト（コマンド文字列）をターミナルに表示。`{agent_session_id}` を含む `resume_command` にも対応し両プレースホルダを渡す仕様に修正 | `api.py` |
 
 ---
 
@@ -327,7 +329,7 @@ PTY バイトデータ受信
 
 | データ | ファイル | 形式 | 内容 |
 |--------|----------|------|------|
-| セッション情報 | `data/sessions.json` | JSON 配列 | `id`・`name`・`cwd`・`order`・`agent_key`・`agent_session_named`・`agent_session_id` |
+| セッション情報 | `data/sessions.json` | JSON 配列 | `id`・`name`・`cwd`・`order`・`agent_key`・`agent_session_named`・`agent_session_id`・`agent_started_at` |
 | セッション ID | `data/session_ids.json` | JSON | AI ツール別セッション ID（終了時に生成） |
 | ターミナルバッファ | `data/buffers/{session_id}.txt` | テキスト | xterm.js シリアライズデータ |
 | アプリ設定 | `source/config/settings.json` | JSON | 全設定パラメータ |

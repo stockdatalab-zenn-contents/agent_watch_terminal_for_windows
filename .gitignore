@@ -34,8 +34,10 @@ desktop.ini
 # Development files
 .claude/
 99_old/
+tests/
 references/
 AGENTS.md
 CLAUDE.md
 MODIFICATION_HISTORY.md
 DECISION_LOG.md
+DECISION.md
