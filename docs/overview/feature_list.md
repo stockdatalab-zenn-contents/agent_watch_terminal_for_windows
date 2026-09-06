@@ -101,9 +101,10 @@ AIコーディングツール専用の「見守りターミナル」。
 | F03-01 | ゲート検出 | エージェント起動検出 | PTY 出力をパターンマッチし、AI ツールの起動を検知（ゲートオープン） | `detection/agent_detector.py` |
 | F03-01 | | ゲートクローズ | Ctrl+C 連打（閾値到達）でゲートを閉じ、検出を停止。シェルプロンプト検出時はゲートを維持し `exited_to_shell` フラグのみ設定 | `detection/agent_detector.py` |
 | F03-02 | ステータス判定 | パターンマッチ判定 | 正規表現パターンで「waiting（許可待ち）」「error（エラー）」を検出 | `detection/pattern_matcher.py` |
-| F03-02 | | スループット判定 | 出力が閾値時間（3秒）継続すると「running（実行中）」と判定 | `detection/agent_detector.py` |
+| F03-02 | | 同時出現判定 | `status_combo_patterns` の AND 条件グループを、直近出力ウィンドウ（リングバッファ＋末尾バッファの連結）に対して判定。1 フラグメントでは表現できない「複数ボタンの同時表示」を検出する。パターンマッチ判定より優先 | `detection/pattern_matcher.py`, `detection/agent_detector.py` |
+| F03-02 | | スループット判定 | 出力が閾値時間（3秒）継続すると「running（実行中）」と判定。ただし同時出現条件が成立中は running へ遷移させない | `detection/agent_detector.py` |
 | F03-02 | | シェルプロンプト判定 | シェルプロンプトパターンを検出し、即座に「idle（待機）」へ遷移 | `detection/pattern_matcher.py` |
-| F03-02 | | デバウンス確認 | 出力停止後 3 秒間のリングバッファを走査し、ステータスを確定 | `detection/agent_detector.py` |
+| F03-02 | | デバウンス確認 | 出力停止後 3 秒間のリングバッファを走査し、ステータスを確定。判定順は 同時出現 → リングバッファ（行単位）→ 末尾バッファ | `detection/agent_detector.py` |
 | F03-03 | ANSI 処理 | エスケープ除去 | ANSI エスケープシーケンスを除去（CUF/CHA はスペース置換で語境界を保持） | `detection/agent_patterns.py` |
 | F03-03 | | 重複抑制 | 同一ステータス+テキストの重複検出を抑制（last_emitted_key 方式） | `detection/agent_detector.py` |
 | F03-04 | リングバッファ | フラグメント蓄積 | PTY 出力を `\r` 分割して (timestamp, text) タプルで蓄積（4KB 上限） | `detection/agent_detector.py` |
@@ -112,7 +113,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F03-05 | | Codex CLI | `codex` コマンド起動を検出 | `detection/agent_patterns.py` |
 | F03-05 | | GitHub Copilot CLI | `copilot` コマンド起動を検出 | `detection/agent_patterns.py` |
 | F03-05 | | Bob Shell | `bob` コマンド起動を検出 | `detection/agent_patterns.py` |
-| F03-05 | | opencode | `opencode` コマンド起動を検出。復元・継続コマンドのシェルエコー（`opencode --session/-s/--continue/-c`）もゲートパターンに追加し、復元起動画面で入力欄プレースホルダ等の既存アンカーが表示されずゲートが開かない不具合に対応。散文や本リポジトリのドキュメント自身への誤検出（実測 11 件）を受け、行頭/シェルプロンプト末尾限定・セッション ID 必須・入力欄プレースホルダの三点リーダ必須へ厳格化（誤マッチ 0 の組合せを採用） | `detection/agent_patterns.py` |
+| F03-05 | | opencode | `opencode` コマンド起動を検出。復元・継続コマンドのシェルエコー（`opencode --session/-s/--continue/-c`）もゲートパターンに追加し、復元起動画面で入力欄プレースホルダ等の既存アンカーが表示されずゲートが開かない不具合に対応。散文や本リポジトリのドキュメント自身への誤検出（実測 11 件）を受け、行頭/シェルプロンプト末尾限定・セッション ID 必須・入力欄プレースホルダの三点リーダ必須へ厳格化（誤マッチ 0 の組合せを採用）。`Allow once` + `Allow always`、`Confirm` + `Cancel` の同時表示を `status_combo_patterns` で waiting 判定 | `detection/agent_patterns.py` |
 
 ---
 

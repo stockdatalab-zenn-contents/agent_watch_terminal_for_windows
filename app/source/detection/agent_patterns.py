@@ -54,6 +54,26 @@ SESSION_MATCH_NONE: str = "none"
 SESSION_MATCH_NAME_CWD: str = "name_cwd"
 SESSION_MATCH_CWD_LATEST: str = "cwd_latest"
 
+# ---------------------------------------------------------------------------
+# ステータス判定パターンの 2 種類
+#
+#   status_patterns       : {status: [regex, ...]}
+#                           1 フラグメント（\r 分割済みの 1 行相当）に対する
+#                           OR 判定。どれか 1 つが当たれば成立。
+#
+#   status_combo_patterns : {status: [[regex, regex, ...], ...]}
+#                           直近出力ウィンドウ（リングバッファ＋末尾バッファ
+#                           を改行連結したもの）に対する AND 判定。
+#                           内側リストの全パターンがウィンドウ内のどこかに
+#                           出現した場合のみ成立し、外側リストは OR。
+#                           「2 つのボタンが同時に画面に出ている」のような、
+#                           1 行では表現できない条件に使う。
+#                           未定義のエージェントは判定をスキップする。
+#
+# 判定順は status_combo_patterns が先。AND 条件の方が具体的であり、
+# 単独語の取りこぼし・誤検出よりも優先させるべきため。
+# ---------------------------------------------------------------------------
+
 AGENTS: dict[str, AgentDict] = {
     "claude": {
         "name": "Claude Code",
@@ -173,6 +193,23 @@ AGENTS: dict[str, AgentDict] = {
                 r"Type\s+your\s+own\s+answer",
             ],
             "error": [],
+        },
+        # 同時出現（AND 条件）による判定。詳細は AGENTS 定義前の
+        # 「status_combo_patterns」コメント参照。
+        #
+        # ダイアログのボタン群は TUI がカーソル制御で別フラグメントへ
+        # 分割して描画するため、1 フラグメント単位の status_patterns では
+        # 取りこぼす。連結ウィンドウに対する AND 判定で確実に拾う。
+        #
+        # "Confirm" / "Cancel" は単独だと AI の応答文中にも現れる一般語の
+        # ため、対で出現することを条件にして誤検出を避ける。
+        "status_combo_patterns": {
+            "waiting": [
+                # 権限確認ダイアログのボタン
+                [r"Allow\s+once", r"Allow\s+always"],
+                # 確認ダイアログのボタン
+                [r"Confirm", r"Cancel"],
+            ],
         },
         # keybind の app_exit が "ctrl+c,ctrl+d,<leader>q" で、
         # Ctrl+C 1 回で終了する（中断は Esc に割当）

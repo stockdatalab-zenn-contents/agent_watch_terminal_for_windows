@@ -688,8 +688,14 @@ class AgentDetector:
 
             agent_key_for_key = state.agent_key or ""
 
+            # --- 同時出現（AND 条件）判定を最優先 ---
+            # 「2 つのボタンが同時に表示されている」という具体的な条件は、
+            # 単独語の一致より確度が高いため先に評価する。
+            result = self._check_status_combo(state)
+
             # --- リングバッファからステータスパターン判定 ---
-            result = self._check_ring_buffer(state)
+            if result is None:
+                result = self._check_ring_buffer(state)
 
             # --- リングバッファで見つからなければ末尾バッファも確認 ---
             if result is None:
@@ -814,6 +820,55 @@ class AgentDetector:
 
         return None
 
+    def _recent_window(self, state: _SessionState) -> str:
+        """直近出力ウィンドウ（リングバッファ＋末尾バッファ）を連結して返す。
+
+        ``_check_ring_buffer`` と同じ年齢フィルタ（``debounce_sec * 2``）を
+        適用し、古いエントリは含めない。時系列順に改行で連結する。
+
+        画面上に同時表示されている内容をひとまとまりのテキストとして
+        扱うためのもので、``check_status_combo`` の入力に使う。
+        """
+        now = time.time()
+        age_limit = self._debounce_sec * 2
+
+        fragments: list[str] = []
+        for ts, frag in reversed(state.recent_output):
+            if now - ts > age_limit:
+                break
+            if frag:
+                fragments.append(frag)
+        fragments.reverse()  # 逆順走査したので時系列順へ戻す
+
+        trailing = self._clean_line(state.line_buffer)
+        if trailing:
+            fragments.append(trailing)
+
+        return "\n".join(fragments)
+
+    def _check_status_combo(
+        self, state: _SessionState
+    ) -> tuple[str, str] | None:
+        """直近出力ウィンドウに対する AND 条件のステータス判定。
+
+        opencode の権限確認ダイアログのように、複数のボタン文言が
+        同時に表示されている場合を waiting と判定するために使う。
+        ``status_combo_patterns`` 未定義のエージェントでは常に ``None``。
+
+        Returns
+        -------
+        tuple[str, str] | None
+            ``(status, pattern)`` on match, or ``None``.
+        """
+        if state.agent_key is None:
+            return None
+
+        window = self._recent_window(state)
+        if not window:
+            return None
+
+        return self._matcher.check_status_combo(window, state.agent_key)
+
     def _find_matched_text(
         self, state: _SessionState, pattern: str
     ) -> str:
@@ -875,6 +930,20 @@ class AgentDetector:
 
         # 既に running → 重複防止
         if state.status == "running":
+            return None
+
+        # ダイアログが同時表示されている間は running に遷移させない。
+        # 画面再描画で出力が続いていても実態はユーザー入力待ちであり、
+        # waiting はデバウンス確定時に発火する。
+        combo = self._check_status_combo(state)
+        if combo is not None:
+            logger.debug(
+                "セッション %s: 同時出現条件が成立中のため "
+                "running 遷移を抑止 (status=%s, pattern=%s)",
+                session_id,
+                combo[0],
+                combo[1],
+            )
             return None
 
         # → running に遷移

@@ -37,6 +37,10 @@ class PatternMatcher:
     def __init__(self) -> None:
         self._gate: dict[str, list[re.Pattern[str]]] = {}
         self._status: dict[str, dict[str, list[re.Pattern[str]]]] = {}
+        # AND 条件グループ: agent -> status -> [[pattern, ...], ...]
+        self._status_combo: dict[
+            str, dict[str, list[list[re.Pattern[str]]]]
+        ] = {}
         self._shell: list[re.Pattern[str]] = []
         self._trailing: list[re.Pattern[str]] = []
 
@@ -69,6 +73,16 @@ class PatternMatcher:
             for status, patterns in agent["status_patterns"].items():
                 self._status[key][status] = [
                     re.compile(p) for p in patterns
+                ]
+
+        # Status combo patterns (per agent, per status, AND groups)
+        # 未定義のエージェントは空 dict となり、判定はスキップされる。
+        for key, agent in AGENTS.items():
+            self._status_combo[key] = {}
+            combo_map = agent.get("status_combo_patterns", {})
+            for status, groups in combo_map.items():
+                self._status_combo[key][status] = [
+                    [re.compile(p) for p in group] for group in groups
                 ]
 
         # Shell prompt patterns (for completed detection)
@@ -146,6 +160,56 @@ class PatternMatcher:
                         cleaned,
                     )
                     return (status, pat.pattern)
+        return None
+
+    def check_status_combo(
+        self, window: str, agent_key: str
+    ) -> tuple[str, str] | None:
+        """*window* 内での複数パターン同時出現（AND 条件）を判定する。
+
+        ``check_status`` が 1 行単位の OR 判定なのに対し、こちらは
+        直近出力をまとめた *window* に対して「グループ内の全パターンが
+        どこかに出現するか」を見る。TUI がカーソル制御でボタンを別々の
+        フラグメントに分割して描画するため、行単位では拾えない
+        「2 つのボタンが同時に表示されている」条件を判定できる。
+
+        Parameters
+        ----------
+        window : str
+            直近出力をまとめたテキスト（リングバッファ＋末尾バッファを
+            改行連結したもの）。**ANSI 除去済みを想定**。
+        agent_key : str
+            エージェント識別子。
+
+        Returns
+        -------
+        tuple[str, str] | None
+            ``(status, pattern)`` on match、未一致なら ``None``。
+            *pattern* は成立したグループ各要素の **選択（OR）** 表現。
+            AND の成立自体はここで判定済みで、この文字列は呼び出し側が
+            「実際にマッチした行」を特定・ログ出力するために使う。
+        """
+        combo_map = self._status_combo.get(agent_key)
+        if not combo_map:
+            return None
+
+        cleaned = strip_ansi(window)
+        for status, groups in combo_map.items():
+            for group in groups:
+                if not group:
+                    continue
+                if all(pat.search(cleaned) for pat in group):
+                    pattern = "|".join(
+                        f"(?:{pat.pattern})" for pat in group
+                    )
+                    logger.debug(
+                        "ステータス同時一致 — agent=%s, status=%s, "
+                        "patterns=%s",
+                        agent_key,
+                        status,
+                        [pat.pattern for pat in group],
+                    )
+                    return (status, pattern)
         return None
 
     def check_completed(self, line: str) -> str | None:
