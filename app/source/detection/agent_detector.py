@@ -890,6 +890,18 @@ class AgentDetector:
         if trailing and compiled.search(trailing):
             return trailing
 
+        # 同時出現条件（status_combo_patterns）はフラグメントをまたいで成立
+        # し得るため、個々の断片には一致しないことがある。その場合に空文字を
+        # 返すと、ログが空になるうえ重複抑制キーが
+        # ``<agent>:<status>:`` に潰れて後続の別ダイアログの通知を
+        # 取りこぼすため、連結ウィンドウから一致箇所を取り出す。
+        window = self._recent_window(state)
+        if window:
+            hit = compiled.search(window)
+            if hit:
+                # フラグメント境界の改行を含み得るので空白を畳む
+                return " ".join(hit.group(0).split())
+
         return ""
 
     # ------------------------------------------------------------------

@@ -40,7 +40,7 @@ from source.session.session_manager import SessionManager  # noqa: E402
 from source.detection.agent_detector import AgentDetector  # noqa: E402
 from source.detection.agent_patterns import (  # noqa: E402
     AGENTS,
-    requires_agent_session_id,
+    get_resume_command,
 )
 from source.notification.toast_notifier import ToastNotifier  # noqa: E402
 from source.notification.taskbar_flasher import TaskbarFlasher  # noqa: E402
@@ -625,59 +625,71 @@ def _schedule_auto_resume() -> None:
     復元方式はエージェント定義の ``session_match`` に従う。
     - name ベース (claude/copilot): 例 ``claude --resume "name"``
     - ID ベース (codex/bob/opencode): 例 ``codex resume <id>``
+
+    ID ベースで ``agent_session_id`` が未取得の場合は、
+    ``resume_command_fallback`` が定義されていればそちらへ倒す
+    （opencode: ``opencode --continue``）。
     """
     for session in _session_manager.get_sessions():
-        agent_key = session.get("agent_key")
-        if not agent_key:
-            continue
+        sid = session.get("id", "")
+        # 1 セッションの準備失敗で、以降のタブの自動復元まで止めないよう
+        # ループ本体全体を保護する（設定値の欠落・タイマー生成の失敗など）。
+        try:
+            agent_key = session.get("agent_key")
+            if not agent_key:
+                continue
 
-        agent_info = AGENTS.get(agent_key)
-        if not agent_info:
-            continue
+            if agent_key not in AGENTS:
+                continue
 
-        sid = session["id"]
+            if not session.get("agent_session_named"):
+                logger.info(
+                    "自動復元スキップ (命名未完了): session=%s, agent=%s",
+                    sid,
+                    agent_key,
+                )
+                continue
 
-        if not session.get("agent_session_named"):
+            # 復元コマンドを構築する。ID ベース復元のエージェントで
+            # agent_session_id が未取得の場合は、定義されていれば
+            # resume_command_fallback（opencode なら --continue）へ倒す。
+            agent_session_id = session.get("agent_session_id", "")
+            resume_cmd = get_resume_command(
+                agent_key, session.get("name", ""), agent_session_id
+            )
+
+            if not resume_cmd:
+                logger.warning(
+                    "自動復元スキップ (復元コマンドを構築できない): "
+                    "session=%s, agent=%s, agent_session_id=%r",
+                    sid,
+                    agent_key,
+                    agent_session_id,
+                )
+                continue
+
+            # 前回起動時の値が下限として残らないよう、この起動の時刻へ更新する。
+            # ゲート開放時にも設定されるが、開放前にアプリが落ちた場合の保険。
+            _session_manager.set_agent_started_at(sid)
+
+            # シェル起動待ち後に resume コマンドを直接送信
+            timer = threading.Timer(
+                3.0, _send_pending_command, args=(sid, f"{resume_cmd}\r")
+            )
+            timer.daemon = True
+            timer.start()
             logger.info(
-                "自動復元スキップ (命名未完了): session=%s, agent=%s",
+                "自動復元スケジュール: session=%s, agent=%s, cmd=%r",
                 sid,
                 agent_key,
+                resume_cmd,
             )
-            continue
-
-        # ID ベース復元のエージェントは agent_session_id が必須
-        agent_session_id = session.get("agent_session_id", "")
-        if requires_agent_session_id(agent_key) and not agent_session_id:
-            logger.warning(
-                "自動復元スキップ (agent_session_id なし): "
-                "session=%s, agent=%s",
+        except Exception:
+            logger.exception(
+                "自動復元の準備に失敗（このセッションのみスキップ）: "
+                "session=%s",
                 sid,
-                agent_key,
             )
-            continue
-
-        # resume コマンドを構築
-        name = session["name"]
-        resume_cmd = agent_info["resume_command"].format(
-            name=name, agent_session_id=agent_session_id,
-        )
-
-        # 前回起動時の値が下限として残らないよう、この起動の時刻へ更新する。
-        # ゲート開放時にも設定されるが、開放前にアプリが落ちた場合の保険。
-        _session_manager.set_agent_started_at(sid)
-
-        # シェル起動待ち後に resume コマンドを直接送信
-        timer = threading.Timer(
-            3.0, _send_pending_command, args=(sid, f"{resume_cmd}\r")
-        )
-        timer.daemon = True
-        timer.start()
-        logger.info(
-            "自動復元スケジュール: session=%s, agent=%s, cmd=%r",
-            sid,
-            agent_key,
-            resume_cmd,
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ import pyperclip
 from source.config import settings_manager
 from source.detection.agent_patterns import (
     AGENTS,
-    requires_agent_session_id,
+    get_resume_command,
 )
 
 if TYPE_CHECKING:
@@ -529,21 +529,22 @@ class Api:
                 if not agent_info:
                     continue
 
+                name = session["name"]
                 agent_session_id = session.get("agent_session_id", "")
-                # 自動復元されるセッションはヒント不要。ただし ID ベース
-                # 復元のエージェントは agent_session_id が取れていないと
-                # 自動復元がスキップされるため、命名済みでも対象に含める。
+                # 自動復元されるセッションはヒント不要。
+                # ID ベース復元でも agent_session_id が未取得なら
+                # resume_command_fallback へ倒れて自動復元されるため、
+                # 「コマンドを組み立てられるか」で判定する。
                 auto_restorable = bool(
                     session.get("agent_session_named")
-                ) and not (
-                    requires_agent_session_id(agent_key)
-                    and not agent_session_id
+                ) and bool(
+                    get_resume_command(agent_key, name, agent_session_id)
                 )
                 if auto_restorable:
                     continue
 
-                name = session["name"]
                 start = agent_info["start_command"]
+                # ここへ来るのは自動復元できないセッション。
                 # ID ベース復元のエージェントは {agent_session_id} を含むため
                 # 両方のプレースホルダを必ず渡す。ID 未取得時は
                 # プレースホルダを表示して手動入力を促す。

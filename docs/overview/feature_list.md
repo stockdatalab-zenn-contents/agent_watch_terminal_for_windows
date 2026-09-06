@@ -172,8 +172,10 @@ AIコーディングツール専用の「見守りターミナル」。
 | F07-01 | | リネーム不要判定 | `rename_command` 未定義の AI ツール（opencode 等）は命名不要として `agent_session_named` を即時 True 化 | `main.py` |
 | F07-02 | セッション ID 収集 | CLI 問合せ | アプリ終了時に AI ツールのローカルデータから稼働中セッション ID を収集（opencode は SQLite `opencode.db` を読取り専用参照、旧 JSON 形式へフォールバック） | `session/session_id_collector.py` |
 | F07-02 | | セッション照合 | エージェント定義の `session_match`（`none`/`name_cwd`/`cwd_latest`）に従い sessions.json と照合し `agent_session_id` を紐付け。cwd 一致のうち最終更新が新しい順に割当てる `cwd_latest`（opencode 向け）を追加し、旧来のハードコード分岐（codex/bob）を廃止。`cwd_latest` は 2 パス構成。第 1 パスで前回取得済み ID がまだ有効なセッションへ優先予約し、同一 cwd の複数タブ間で `agent_session_id` が入れ替わる不具合を防止。第 2 パスで残りをゲート開放時刻（`agent_started_at`）以降に更新されたもののうち最終更新が新しい順に割当 | `session/session_manager.py`, `detection/agent_patterns.py` |
-| F07-03 | 自動再開 | コマンド送信 | 起動時に `resume_command`（例: `claude --resume "{name}"` / ID ベースは `opencode --session {agent_session_id}`）を PTY へ送信し、前回セッションを復元 | `main.py`, `detection/agent_patterns.py` |
-| F07-03 | | 復元ヒント表示 | 自動再開不可の場合、手動復元プロンプト（コマンド文字列）をターミナルに表示。`{agent_session_id}` を含む `resume_command` にも対応し両プレースホルダを渡す仕様に修正 | `api.py` |
+| F07-03 | 自動再開 | コマンド送信 | 起動時に `resume_command`（例: `claude --resume "{name}"` / ID ベースは `opencode --session {agent_session_id}`）を PTY へ送信し、前回セッションを復元。組み立ては `get_resume_command()` に集約 | `main.py`, `detection/agent_patterns.py` |
+| F07-03 | | ID 未取得時のフォールバック | `{agent_session_id}` を要求するのに ID が採取できなかった場合、`resume_command_fallback` があればそちらへ倒す（opencode: `opencode --continue`）。opencode は最初のメッセージ送信までセッションを永続化しないため、タブを開いただけで再起動すると ID が採取できず自動復元がスキップされていた不具合への対応。`--continue` はそのディレクトリの直近セッションを再開し、対象が無ければ通常起動になる | `main.py`, `detection/agent_patterns.py` |
+| F07-03 | | 復元コマンド構築の保護 | セッション名に `{` 等が含まれると `str.format()` が例外を投げ、以降のタブの自動復元まで停止する問題に対応。セッション単位で例外を捕捉して継続 | `main.py` |
+| F07-03 | | 復元ヒント表示 | 自動再開不可の場合、手動復元プロンプト（コマンド文字列）をターミナルに表示。`{agent_session_id}` を含む `resume_command` にも対応し両プレースホルダを渡す。ヒント要否は `get_resume_command()` でコマンドを組み立てられるかで判定するため、フォールバックで自動復元されるセッションには表示しない | `api.py` |
 
 ---
 

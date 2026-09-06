@@ -55,6 +55,24 @@ SESSION_MATCH_NAME_CWD: str = "name_cwd"
 SESSION_MATCH_CWD_LATEST: str = "cwd_latest"
 
 # ---------------------------------------------------------------------------
+# 復元コマンド (``resume_command`` / ``resume_command_fallback``)
+#
+#   resume_command          : 通常の復元コマンド。``{name}`` と
+#                             ``{agent_session_id}`` を差し込める。
+#
+#   resume_command_fallback : ``{agent_session_id}`` を要求するのに ID が
+#                             取得できなかった場合の代替コマンド。省略可。
+#
+# opencode は「最初のメッセージを送るまでセッションを永続化しない」ため、
+# タブを開いただけ・起動しただけで再起動すると ID が採取できず、ID ベースの
+# 自動復元が丸ごとスキップされていた。``opencode --continue`` は
+# 「そのディレクトリの直近セッション」を再開するため ID が不要で、
+# 対象セッションが無ければ通常起動になる（実機確認済み）。
+#
+# 組み立ては get_resume_command() を使うこと。
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # ステータス判定パターンの 2 種類
 #
 #   status_patterns       : {status: [regex, ...]}
@@ -221,6 +239,11 @@ AGENTS: dict[str, AgentDict] = {
         # /rename 相当のコマンドを持たないため rename_command は定義しない。
         # 終了時の命名手順はスキップされ、命名済み扱いになる。
         "resume_command": "opencode --session {agent_session_id}",
+        # opencode はメッセージ送信までセッションを永続化しないため、
+        # agent_session_id が採取できないまま再起動するケースが日常的に発生する。
+        # その場合は ID 不要の --continue（そのディレクトリの直近セッションを
+        # 再開）へフォールバックする。対象が無ければ通常起動になる。
+        "resume_command_fallback": "opencode --continue",
     },
 }
 
@@ -357,3 +380,49 @@ def requires_agent_session_id(agent_key: str) -> bool:
     if not agent:
         return False
     return "{agent_session_id}" in agent.get("resume_command", "")
+
+
+def get_resume_command(
+    agent_key: str, name: str, agent_session_id: str = ""
+) -> str:
+    """自動復元に使うコマンド文字列を組み立てて返す。
+
+    ``resume_command`` が ``{agent_session_id}`` を要求するのに ID が
+    未取得の場合は、``resume_command_fallback`` があればそちらを使う。
+    どちらも使えない場合は空文字を返す（＝自動復元は不可）。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。未登録キーも許容（空文字を返す）。
+    name : str
+        セッション名。``{name}`` に差し込む。
+    agent_session_id : str
+        AI ツール側のセッション ID。未取得なら空文字。
+
+    Returns
+    -------
+    str
+        実行する復元コマンド。自動復元できない場合は空文字。
+
+    Raises
+    ------
+    KeyError, IndexError, ValueError
+        テンプレートに未知のプレースホルダが含まれる場合など、
+        ``str.format()`` が失敗したとき。呼び出し側で保護すること。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return ""
+
+    template = agent.get("resume_command", "")
+    if (
+        template
+        and "{agent_session_id}" in template
+        and not agent_session_id
+    ):
+        template = agent.get("resume_command_fallback", "")
+    if not template:
+        return ""
+
+    return template.format(name=name, agent_session_id=agent_session_id)
