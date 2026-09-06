@@ -39,6 +39,13 @@
   --status-error: #f38ba8;
   --status-idle: #cdd6f4;
 
+  /* ターミナルカーソル配色
+     既定値は CATPPUCCIN_MOCHA_THEME の cursor / cursorAccent と同値。
+     settings.json の terminal.theme が指定されていれば
+     terminal_manager.js の _syncCursorCssVars() が実行時に上書きする。 */
+  --terminal-cursor: #f5e0dc;
+  --terminal-cursor-accent: #1e1e2e;
+
   /* UI sizing */
   --sidebar-width: 220px;
   --sidebar-min-width: 150px;
@@ -99,10 +106,16 @@ body {
 }
 
 /* ── GPU なし環境向け: transition/animation 無効化 ───────── */
+/*
+ * animation は duration を 0s にするのではなく animation 自体を none にする。
+ * duration: 0s だとアニメーションは「最後のキーフレームで固定」される挙動になり、
+ * 途中フレームで消える表現（点滅など）が消灯側で止まる恐れがある。
+ * none なら base のスタイルがそのまま適用され、意図しない固定状態を作らない。
+ */
 .reduced-motion,
 .reduced-motion *,
 .reduced-motion *::before,
 .reduced-motion *::after {
   transition-duration: 0s !important;
-  animation-duration: 0s !important;
+  animation: none !important;
 }

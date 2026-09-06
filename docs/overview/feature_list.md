@@ -67,6 +67,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F01-01 | | PTY 破棄 | セッション削除・アプリ終了時にプロセスを安全に終了 | `pty/pty_manager.py` |
 | F01-02 | ターミナル描画 | xterm.js 描画 | PTY 出力を xterm.js で画面描画（Base64 転送） | `frontend/js/terminal_manager.js` |
 | F01-02 | | TUI モード制限 | 代替スクリーンバッファ (1049/47/1047) とマウストラッキング (1000/1002/1003) を遮断し、スクロールバック消失・選択干渉を防止 | `frontend/js/terminal_manager.js` |
+| F01-02 | | カーソル可視化 | block カーソルの配色を `!important` で上書きし、truecolor セルの inline style に負けて不可視になる問題を防止（opencode は DECSCUSR `ESC[1 q` で block カーソルを要求） | `frontend/css/terminal.css` |
 | F01-02 | | カスタムスクロールバー | xterm 標準スクロールバーを独自オーバーレイに置換（ドラッグ・クリック操作対応） | `frontend/js/scrollbar.js` |
 | F01-03 | クリップボード操作 | コピー | 右クリック時、選択テキストをクリップボードへコピー | `frontend/js/context_menu.js` |
 | F01-03 | | ペースト | 右クリック時（選択なし）、クリップボード内容を PTY へ送信 | `frontend/js/context_menu.js` |
@@ -208,15 +209,16 @@ AIコーディングツール専用の「見守りターミナル」。
 | F10-01 | 設定読込・保存 | JSON 管理 | `settings.json` の読込・キャッシュ・アトミック書込み（一時ファイル＋replace） | `config/settings_manager.py` |
 | F10-01 | | ドット記法アクセス | `get("terminal.font_size")` のような階層キーでのアクセス | `config/settings_manager.py` |
 | F10-01 | | スレッドセーフ | threading.Lock による排他制御 | `config/settings_manager.py` |
-| F10-02 | ターミナル設定 | フォント | フォントファミリー・サイズ | `config/settings.json` |
-| F10-02 | | カーソル | スタイル（bar/block/underline）・点滅有無 | `config/settings.json` |
+| F10-02 | ターミナル設定 | フォント | フォントファミリー・サイズ。ターミナル生成時に xterm.js のオプションへ反映 | `config/settings.json`, `frontend/js/terminal_manager.js` |
+| F10-02 | | カーソル | スタイル（bar/block/underline）・点滅有無。ターミナル生成時に xterm.js のオプションへ反映 | `config/settings.json`, `frontend/js/terminal_manager.js` |
 | F10-02 | | スクロールバック | バッファ行数（既定: 2000） | `config/settings.json` |
-| F10-02 | | カラーテーマ | Catppuccin Mocha 準拠の 16 色 ANSI カラー + 背景・前景 | `config/settings.json` |
+| F10-02 | | カラーテーマ | Catppuccin Mocha 準拠の 16 色 ANSI カラー + 背景・前景。snake_case のキーを xterm.js の ITheme（camelCase）へ変換して反映。未知のキー・非文字列は無視 | `config/settings.json`, `frontend/js/terminal_manager.js` |
+| F10-02 | | カーソル配色の CSS 連携 | `theme.cursor` / `theme.cursor_accent` を CSS カスタムプロパティ（`--terminal-cursor` / `--terminal-cursor-accent`）へ反映し、block カーソルの `!important` 指定と配色を揃える | `frontend/js/terminal_manager.js`, `frontend/css/theme.css` |
 | F10-02 | | 背景透過 | `allow_transparency` フラグ（ターミナル背景の透過設定） | `config/settings.json` |
 | F10-03 | ウィンドウ設定 | サイズ・透明度 | 初期ウィンドウサイズ・透明度 (0.0-1.0) | `config/settings.json` |
 | F10-03 | | 最前面表示 | always_on_top フラグ | `config/settings.json` |
 | F10-03 | | デバッグモード | DevTools 表示の有効化 | `config/settings.json` |
-| F10-03 | | アニメーション抑制 | reduce_motion フラグ（CSS アニメーション無効化） | `config/settings.json` |
+| F10-03 | | アニメーション抑制 | reduce_motion フラグ（`transition-duration: 0s` + `animation: none`）。duration を 0s にすると最終キーフレームで固定される挙動を避けるため animation 自体を無効化 | `config/settings.json`, `frontend/css/theme.css` |
 | F10-04 | 通知設定 | トースト有効化 | toast_enabled フラグ | `config/settings.json` |
 | F10-04 | | タスクバー点滅有効化 | taskbar_flash_enabled フラグ | `config/settings.json` |
 | F10-04 | | 検出閾値 | `debounce_ms`・`running_threshold_ms`・`waiting_recovery_threshold_ms`・`error_recovery_threshold_ms`・`ctrlc_window_ms` | `config/settings.json` |

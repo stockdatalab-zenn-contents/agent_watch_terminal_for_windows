@@ -47,8 +47,10 @@ const CATPPUCCIN_MOCHA_THEME = {
 /*  Terminal defaults                                                 */
 /* ------------------------------------------------------------------ */
 
+// theme は既定値の複製を持つ。CATPPUCCIN_MOCHA_THEME 側は
+// 「有効なキー一覧」と「未設定時の既定値」の参照元として不変に保つ。
 const TERMINAL_OPTIONS = {
-  theme:             CATPPUCCIN_MOCHA_THEME,
+  theme:             Object.assign({}, CATPPUCCIN_MOCHA_THEME),
   fontFamily:        "'Consolas', 'Segoe UI Emoji', 'Courier New', monospace",
   fontSize:          14,
   cursorStyle:       'bar',
@@ -73,19 +75,79 @@ const TerminalManager = {
    * settings.json の terminal セクションを TERMINAL_OPTIONS に反映する。
    * createTerminal() より前に呼び出すこと。
    *
+   * 値の検証は緩めに行い、型が合わない項目は既定値のまま残す。
+   * xterm.js は不正なオプションで例外を投げるため、
+   * 設定ファイルの記述ミスでアプリ全体が起動不能になるのを避ける。
+   *
    * @param {object} termSettings - settings.terminal オブジェクト
    */
   applySettings(termSettings) {
-    if (!termSettings) return;
+    if (!termSettings) {
+      this._syncCursorCssVars();
+      return;
+    }
+    if (typeof termSettings.font_family === 'string' && termSettings.font_family) {
+      TERMINAL_OPTIONS.fontFamily = termSettings.font_family;
+    }
+    // 0 以下だと xterm.js のセル寸法計算が破綻するため下限を設ける。
+    if (typeof termSettings.font_size === 'number' && termSettings.font_size > 0) {
+      TERMINAL_OPTIONS.fontSize = termSettings.font_size;
+    }
     if (typeof termSettings.scrollback === 'number') {
       TERMINAL_OPTIONS.scrollback = termSettings.scrollback;
     }
     if (typeof termSettings.cursor_blink === 'boolean') {
       TERMINAL_OPTIONS.cursorBlink = termSettings.cursor_blink;
     }
+    // カーソル形状。bar は 1px の縦線で視認しづらいため、
+    // block / underline へ切り替えられるようにする。
+    // 未知の値は xterm.js が例外を投げるため、既知の 3 種のみ受け付ける。
+    if (['bar', 'block', 'underline'].indexOf(termSettings.cursor_style) !== -1) {
+      TERMINAL_OPTIONS.cursorStyle = termSettings.cursor_style;
+    }
     if (typeof termSettings.allow_transparency === 'boolean') {
       TERMINAL_OPTIONS.allowTransparency = termSettings.allow_transparency;
     }
+    this._applyTheme(termSettings.theme);
+    this._syncCursorCssVars();
+  },
+
+  /**
+   * settings.json の theme（snake_case）を xterm.js の ITheme（camelCase）へ
+   * 変換して TERMINAL_OPTIONS.theme に上書きする。
+   *
+   * 例: cursor_accent -> cursorAccent、bright_black -> brightBlack
+   *
+   * CATPPUCCIN_MOCHA_THEME に存在するキーだけを受け付け、
+   * 未知のキーや文字列以外の値は無視する。
+   *
+   * @param {object|undefined} themeSettings - settings.terminal.theme オブジェクト
+   */
+  _applyTheme(themeSettings) {
+    if (!themeSettings || typeof themeSettings !== 'object') return;
+
+    Object.keys(themeSettings).forEach(function (key) {
+      var camel = key.replace(/_([a-z])/g, function (_m, c) {
+        return c.toUpperCase();
+      });
+      if (!Object.prototype.hasOwnProperty.call(CATPPUCCIN_MOCHA_THEME, camel)) return;
+      if (typeof themeSettings[key] !== 'string' || !themeSettings[key]) return;
+      TERMINAL_OPTIONS.theme[camel] = themeSettings[key];
+    });
+  },
+
+  /**
+   * カーソル配色を CSS カスタムプロパティへ反映する。
+   *
+   * terminal.css は truecolor セルの inline style に勝つため
+   * block カーソルの配色を !important で指定しており、その色を
+   * settings.json の theme.cursor / theme.cursor_accent と揃える必要がある。
+   * CSS 側にも既定値を持たせてあるため、ここで未設定でも破綻しない。
+   */
+  _syncCursorCssVars() {
+    var root = document.documentElement;
+    root.style.setProperty('--terminal-cursor', TERMINAL_OPTIONS.theme.cursor);
+    root.style.setProperty('--terminal-cursor-accent', TERMINAL_OPTIONS.theme.cursorAccent);
   },
 
   /* ---- create ---------------------------------------------------- */

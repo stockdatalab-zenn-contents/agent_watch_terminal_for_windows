@@ -40,6 +40,37 @@
   display: none;
 }
 
+/* ── カーソルの可視性確保 ────────────────────────────────── */
+/*
+ * xterm.js (DOM renderer) は block カーソルの配色を
+ * `.xterm-cursor.xterm-cursor-block { background-color / color }` という
+ * <style> ルールで当てる。しかし truecolor (SGR 38;2 / 48;2) で描かれた
+ * セルの span には inline style で色が付くため、詳細度に関係なく
+ * inline style が勝ち、カーソルがセル背景に溶けて見えなくなる。
+ *
+ * 点滅アニメーション動作中だけは animation origin が inline style より
+ * 優先されるため見えていたが、settings.json の window.reduce_motion で
+ * アニメーションを無効化すると恒久的に不可視になっていた。
+ *
+ * opencode は入力欄を truecolor で描画し、DECSCUSR (ESC[1 q) で
+ * block カーソルを要求するため、この条件に完全に一致していた。
+ *
+ * !important はアニメーションより優先度が高いため、この指定により
+ * block カーソルは点滅しなくなるが、常に確実に表示される。
+ * 本アプリの既定は cursor_blink: false / reduce_motion: true であり、
+ * 点滅を前提としていないため実害はない。
+ *
+ * bar / underline / outline は box-shadow・border-bottom・outline で
+ * 描画され inline style と競合しないため、指定は不要。
+ *
+ * 配色は theme.css の既定値を、settings.json の terminal.theme が
+ * 指定されていれば terminal_manager.js が実行時に上書きする。
+ */
+.xterm .xterm-cursor.xterm-cursor-block {
+  background-color: var(--terminal-cursor) !important;
+  color: var(--terminal-cursor-accent) !important;
+}
+
 /* ── Focus indicator ────────────────────────────────────── */
 .terminal-wrapper:focus-within {
   /* No visible outline; terminal handles its own focus */
