@@ -52,6 +52,9 @@ class Api:
         PTY 出力の統合コールバック。
         agent_detector / session_recorder /
         JS 転送を連鎖実行する。main.py から注入される。
+    on_rename : Callable[[str, str], None] | None
+        セッション名変更後に呼ばれるコールバック。AI ツール側へ
+        名前を反映する用途で main.py から注入される。省略可。
     """
 
     def __init__(
@@ -64,6 +67,7 @@ class Api:
         on_pty_output: Callable[[str, bytes], None],
         buffers_dir: str = "",
         agent_detector: "AgentDetector | None" = None,
+        on_rename: Callable[[str, str], None] | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._pty_manager = pty_manager
@@ -73,6 +77,7 @@ class Api:
         self._on_pty_output = on_pty_output
         self._buffers_dir = buffers_dir
         self._agent_detector = agent_detector
+        self._on_rename = on_rename
 
     # ==================================================================
     # 初期化一括取得 (JS から呼び出し)
@@ -210,6 +215,16 @@ class Api:
             self._session_manager.set_agent_session_named(
                 session_id, False
             )
+
+            # AI ツール側へ即座に反映できるものは反映する
+            # （opencode2 は REST API でタイトルを変更できる）
+            if self._on_rename is not None:
+                try:
+                    self._on_rename(session_id, name)
+                except Exception:
+                    logger.exception(
+                        "rename の外部反映に失敗: session=%s", session_id
+                    )
 
             return True
         except Exception:

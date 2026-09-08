@@ -1,5 +1,5 @@
 """
-session_id_collector - codex/bob/opencode のセッション情報を収集するモジュール
+session_id_collector - codex/bob/opencode/opencode2 のセッション情報を収集するモジュール
 
 アプリ終了時に各 AI ツールのローカルデータから
 セッション ID を収集し、session_ids.json として出力する。
@@ -565,12 +565,151 @@ def _ms_to_iso(epoch_ms: int | float | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# opencode2 セッション情報の収集
+# ---------------------------------------------------------------------------
+
+# opencode2 は opencode v1 と同じデータディレクトリ・同じ opencode.db を
+# 共有するが、セッションの書き込み先テーブルが異なる（実機確認済み）。
+#   v1 : session テーブル
+#   v2 : session_v2 テーブル
+# さらに session_v2 には v1 がミラーした行も混在するため、version カラムで
+# 除外する。v1 の行は "1.18.29" のように "1." で始まり、v2 のベータは
+# "0.0.0-beta-19271" 形式（正式版は 2 系になる見込み）。
+_OPENCODE_V1_VERSION_RE = re.compile(r"^1\.")
+
+
+def collect_opencode2_sessions() -> list[dict]:
+    """opencode2 のセッション情報を収集する。
+
+    opencode v1 と同じ opencode.db / opencode-<channel>.db を読むが、
+    参照するテーブルは ``session_v2``。v1 がミラーした行は version で
+    除外し、v2 由来のセッションだけを返す。
+
+    Returns
+    -------
+    list[dict]
+        opencode2 セッション情報のリスト。updated_at の新しい順（降順）。
+        各要素は ``{"agent_key", "name", "agent_session_id", "cwd", "updated_at"}``。
+    """
+    try:
+        if not os.path.isdir(_OPENCODE_BASE_DIR):
+            logger.debug(
+                "opencode2 データディレクトリが見つからない: %s",
+                _OPENCODE_BASE_DIR,
+            )
+            return []
+
+        entries: list[dict] = []
+        for db_path in _find_opencode_db_paths():
+            try:
+                entries.extend(_read_opencode2_db(db_path))
+            except Exception as exc:
+                # 1 DB の想定外の破損が他 DB の収集を巻き添えにしないよう、
+                # ここで握りつぶして次の DB へ進む
+                logger.warning(
+                    "opencode2 DB の読み込みに失敗: %s — %s", db_path, exc
+                )
+
+        entries.sort(key=lambda e: e.get("updated_at", ""), reverse=True)
+
+        logger.info("opencode2 セッション情報を収集: %d 件", len(entries))
+        return entries
+    except Exception as exc:
+        # opencode2 側の想定外の異常で他ツールの収集結果まで
+        # 失うことがないよう、呼び出し元へは例外を投げず空リストで返す
+        logger.warning("opencode2 セッション情報の収集に失敗: %s", exc)
+        return []
+
+
+def _read_opencode2_db(db_path: str) -> list[dict]:
+    """opencode2 の SQLite DB 1 ファイルからセッション情報を読み込む。
+
+    起動中の opencode2 をロックしないよう読み取り専用 URI で接続する。
+
+    Parameters
+    ----------
+    db_path : str
+        DB ファイルの絶対パス。
+
+    Returns
+    -------
+    list[dict]
+        セッション情報のリスト。読み取り不可の場合は空リスト。
+    """
+    entries: list[dict] = []
+    uri = _to_sqlite_ro_uri(db_path)
+
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "opencode2 SQLite への接続に失敗: %s — %s", db_path, exc
+        )
+        return []
+
+    try:
+        # v1 しか使っていない環境では session_v2 テーブルが存在しない。
+        # 想定内のケースなので warning ではなく debug で静かに抜ける
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            ("session_v2",),
+        )
+        if cur.fetchone() is None:
+            logger.debug("opencode2 の session_v2 テーブルが無い: %s", db_path)
+            return []
+
+        cur = conn.execute(
+            "SELECT id, title, directory, time_updated, version "
+            "FROM session_v2"
+        )
+        for row in cur.fetchall():
+            session_id, title, directory, time_updated, version = row
+
+            # スキーマ上は TEXT 想定だが、破損 DB では INTEGER/BLOB/NULL が
+            # 混入し得る。非文字列は空文字扱いにし、os.path.normpath() の
+            # TypeError を未然に防ぐ（id が空文字になった行はスキップする）
+            session_id = session_id if isinstance(session_id, str) else ""
+            if not session_id:
+                logger.debug(
+                    "opencode2 session_v2 テーブルの id が不正なため行をスキップ: %s",
+                    db_path,
+                )
+                continue
+
+            # v1 がミラーした行は opencode 側の収集が担当するため除外する
+            version = version if isinstance(version, str) else ""
+            if _OPENCODE_V1_VERSION_RE.match(version):
+                continue
+
+            title = title if isinstance(title, str) else ""
+            directory = directory if isinstance(directory, str) else ""
+            entries.append({
+                "agent_key": "opencode2",
+                "name": title,
+                "agent_session_id": session_id,
+                "cwd": os.path.normpath(directory) if directory else "",
+                "updated_at": _ms_to_iso(time_updated),
+            })
+    except sqlite3.Error as exc:
+        logger.warning(
+            "opencode2 session_v2 テーブルの読み込みに失敗: %s — %s",
+            db_path,
+            exc,
+        )
+        entries = []
+    finally:
+        conn.close()
+
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # 統合: session_ids.json の生成
 # ---------------------------------------------------------------------------
 
 
 def collect_all_session_ids() -> list[dict]:
-    """codex と bob と opencode のセッション情報を統合して返す。
+    """codex と bob と opencode と opencode2 のセッション情報を統合して返す。
 
     Returns
     -------
@@ -581,6 +720,7 @@ def collect_all_session_ids() -> list[dict]:
     result.extend(collect_codex_sessions())
     result.extend(collect_bob_sessions())
     result.extend(collect_opencode_sessions())
+    result.extend(collect_opencode2_sessions())
     return result
 
 

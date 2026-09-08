@@ -59,15 +59,24 @@
     "debug": false,
     "reduce_motion": true
   },
+  "opencode2": {
+    "_doc": {
+      "_section": "opencode2 連携",
+      "api_status_enabled": "opencode2 のローカル API からセッション単位の状態を取得する。false にすると従来の画面文言による判定のみになる",
+      "poll_interval_ms": "状態取得の間隔 (ms)。短くすると反応が速くなるがローカル API の呼び出し回数が増える。opencode2 の 1 ターンは 2 秒前後で終わることがあり、間隔が長いと実行中を観測できないまま終わるため 750 を既定とする"
+    },
+    "api_status_enabled": true,
+    "poll_interval_ms": 750
+  },
   "notification": {
     "_doc": {
       "_section": "通知",
       "toast_enabled": "OS トースト通知の有効/無効",
       "taskbar_flash_enabled": "タスクバー点滅の有効/無効",
       "debounce_ms": "通知デバウンス間隔 (ms)",
-      "running_threshold_ms": "running 状態の判定閾値 (ms)",
+      "running_threshold_ms": "running 状態の判定閾値 (ms)。エージェント定義側に running_threshold_ms があればそちらが優先される",
       "waiting_recovery_threshold_ms": "waiting 復帰の判定閾値 (ms)",
-      "error_recovery_threshold_ms": "error 復帰の判定閾値 (ms)",
+      "error_recovery_threshold_ms": "error 復帰の判定閾値 (ms)。error 状態を検出するエージェントが無い間は使われない",
       "ctrlc_window_ms": "Ctrl+C 検出の時間ウィンドウ (ms)"
     },
     "toast_enabled": true,

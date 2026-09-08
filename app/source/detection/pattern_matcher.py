@@ -36,6 +36,8 @@ class PatternMatcher:
 
     def __init__(self) -> None:
         self._gate: dict[str, list[re.Pattern[str]]] = {}
+        # 版確定パターン（pin）: 起動コマンドのエコーからツールを一意に決める
+        self._pin: dict[str, list[re.Pattern[str]]] = {}
         self._status: dict[str, dict[str, list[re.Pattern[str]]]] = {}
         # AND 条件グループ: agent -> status -> [[pattern, ...], ...]
         self._status_combo: dict[
@@ -65,6 +67,12 @@ class PatternMatcher:
         for key, agent in AGENTS.items():
             self._gate[key] = [
                 re.compile(p) for p in agent["gate_patterns"]
+            ]
+
+        # Pin patterns (per agent) -- 未定義のエージェントは空リスト
+        for key, agent in AGENTS.items():
+            self._pin[key] = [
+                re.compile(p) for p in agent.get("pin_patterns", [])
             ]
 
         # Status patterns (per agent, per status)
@@ -114,6 +122,36 @@ class PatternMatcher:
                 if pat.search(cleaned):
                     logger.debug(
                         "ゲート一致 — agent=%s, pattern=%s, line=%r",
+                        agent_key,
+                        pat.pattern,
+                        cleaned,
+                    )
+                    return agent_key
+        return None
+
+    def check_pin(self, line: str) -> str | None:
+        """Check whether *line* pins the session to a specific agent.
+
+        pin は「打ち込まれた起動コマンドのエコー」のように、ツールを
+        一意に確定できる強い証拠のみを対象とする。gate が画面文言で
+        取り違えを起こしうる組（opencode / opencode2）の切り分けに使う。
+
+        Parameters
+        ----------
+        line : str
+            A single line of terminal output (**already ANSI-stripped**).
+
+        Returns
+        -------
+        str | None
+            The agent key on match, or ``None``.
+        """
+        cleaned = strip_ansi(line)
+        for agent_key, patterns in self._pin.items():
+            for pat in patterns:
+                if pat.search(cleaned):
+                    logger.debug(
+                        "版確定（pin）一致 — agent=%s, pattern=%s, line=%r",
                         agent_key,
                         pat.pattern,
                         cleaned,

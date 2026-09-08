@@ -92,6 +92,56 @@ SESSION_MATCH_CWD_LATEST: str = "cwd_latest"
 # 単独語の取りこぼし・誤検出よりも優先させるべきため。
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 版確定パターン (``pin_patterns``) と PIN_GROUPS
+#
+# opencode と opencode2 は TUI の文言がほぼ共通で、画面文言ベースの
+# gate_patterns だけでは版を判別できない（"Ask anything…" は両方に出る）。
+# そこで「打ち込まれた起動コマンドのエコー」という、より強い証拠だけを
+# pin_patterns として別に持ち、ゲートが開くときの最終判断に使う。
+#
+#   pin_patterns : ツールを一意に確定できるパターン。省略可。
+#   PIN_GROUPS   : 画面文言を共有し取り違えが起きうるエージェントの組。
+#                  gate の判定結果と pin が「同じグループ内で食い違った」
+#                  場合のみ pin を優先する。別グループなら gate を採用し、
+#                  無関係なツール同士が影響し合わないようにする。
+#
+# 例: ``opencode2`` を起動 → エコー行で pin=opencode2 → 数行あとの
+#     "Ask anything…" で gate=opencode → 同グループなので opencode2 に補正。
+# ---------------------------------------------------------------------------
+
+PIN_GROUPS: list[set[str]] = [
+    {"opencode", "opencode2"},
+]
+
+# ---------------------------------------------------------------------------
+# ステータス判定の供給源 (``status_source``)
+#
+#   "pattern" (既定) : PTY 出力の文言を正規表現で判定する従来方式。
+#   "api"            : 外部（AI ツール自身の API）から取得した状態を使う。
+#
+# 文言方式には構造的な限界がある。TUI が複数セッションをタブで抱える場合、
+# 画面に出るのはアクティブなタブの内容だけで、他タブの権限待ちなどは
+# どこにも描画されない。またセッションを一意に同定する情報も画面に無い。
+# "api" はその両方を解消する。
+# ---------------------------------------------------------------------------
+
+STATUS_SOURCE_PATTERN: str = "pattern"
+STATUS_SOURCE_API: str = "api"
+
+# ---------------------------------------------------------------------------
+# running 判定のエージェント別パラメータ（任意）
+#
+#   running_threshold_ms : 出力が継続した時間がこの値を超えたら running。
+#                          未指定なら settings.json の全体設定を使う。
+#   running_min_cps      : 上記に加えて要求する平均出力レート（文字/秒）。
+#                          未指定・0 ならレート判定なし（従来どおり）。
+#
+# 継続時間だけで判定すると、TUI の入力欄でタイプしている間の再描画まで
+# running と見なしてしまう。閾値を下げるエージェントでは、レートを併用して
+# 「人が打っている」と「AI が生成している」を切り分ける。
+# ---------------------------------------------------------------------------
+
 AGENTS: dict[str, AgentDict] = {
     "claude": {
         "name": "Claude Code",
@@ -202,6 +252,10 @@ AGENTS: dict[str, AgentDict] = {
             r"(?:(?:--session|-s)\s+ses_[A-Za-z0-9]+"
             r"|(?:--continue|-c)(?![\w-]))",
         ],
+        # 版確定パターン。``(?![\w-])`` により "opencode2" には当たらない。
+        "pin_patterns": [
+            r"(?:^|[>$#]\s*)opencode(?![\w-])",
+        ],
         "status_patterns": {
             "waiting": [
                 # 権限確認ダイアログ（Allow once / Allow always / Reject）
@@ -244,6 +298,74 @@ AGENTS: dict[str, AgentDict] = {
         # その場合は ID 不要の --continue（そのディレクトリの直近セッションを
         # 再開）へフォールバックする。対象が無ければ通常起動になる。
         "resume_command_fallback": "opencode --continue",
+    },
+    "opencode2": {
+        # 表示名にスペースを含めないこと。session_ui.js が
+        # ``agentName.toLowerCase().split(' ')[0]`` でラベルを作るため、
+        # "OpenCode 2" のようにすると "opencode" と表示され v1 と紛れる。
+        "name": "opencode2",
+        # opencode2（OpenCode 2 系）は v1 と TUI の文言がほぼ共通のため、
+        # 画面文言だけでは版を判別できない。ここでは「復元コマンドの
+        # シェルエコー」だけをゲートに置き、通常起動の切り分けは
+        # pin_patterns（版確定パターン）に任せる。
+        "gate_patterns": [
+            # 誤検出を避ける絞り込みは v1 と同じ 3 点。
+            #   1. 行頭、またはシェルプロンプト末尾 (> $ #) の直後
+            #   2. --session/-s はセッション ID (ses_...) を伴う
+            #   3. --continue/-c は後続が語構成文字でない
+            r"(?:^|[>$#]\s*)opencode2\s+"
+            r"(?:(?:--session|-s)\s+ses_[A-Za-z0-9]+"
+            r"|(?:--continue|-c)(?![\w-]))",
+        ],
+        # 打ち込まれたコマンド名そのもの。フラグの有無を問わず拾う。
+        # 直後に語構成文字が続く場合（"opencode2x" 等）は除外する。
+        "pin_patterns": [
+            r"(?:^|[>$#]\s*)opencode2(?![\w-])",
+        ],
+        "status_patterns": {
+            "waiting": [
+                r"Permission\s+required",
+                r"Allow\s+once",
+                r"Type\s+your\s+own\s+answer",
+            ],
+            "error": [],
+        },
+        # v2 は権限ダイアログのボタン文言が v1 から変わっている。
+        #   v1: "Allow once" / "Allow always"
+        #   v2: "Allow once" / "Always allow"
+        "status_combo_patterns": {
+            "waiting": [
+                [r"Allow\s+once", r"Always\s+allow"],
+                [r"Confirm", r"Cancel"],
+            ],
+        },
+        # keybind の app_exit は v1 と同一（"ctrl+c,ctrl+d,<leader>q"）で
+        # Ctrl+C 1 回で終了。中断は Esc に割当（実機確認済み）。
+        "ctrlc_to_close": 1,
+        # opencode2 は 1 ターン 2 秒前後で終わることが多く、既定の
+        # 3000ms では running が一度も立たないまま idle に戻る（実測）。
+        "running_threshold_ms": 800,
+        # 閾値を下げるとタイプ中の再描画まで running と誤判定するため、
+        # 出力レートの下限を併用する。実測値は次のとおり。
+        #   タイプ中 : 約 438 文字/秒
+        #   生成中   : 約 25,000 文字/秒
+        #   静止中   : 0 文字/秒
+        # 両者の中間に置き、生成の終盤で落ちても切れない値にする。
+        "running_min_cps": 2000,
+        # ステータス判定の供給源。"api" にすると、PTY 出力の文言ではなく
+        # opencode2 のローカル API から取得した状態を採用する。
+        # 画面に出ない非アクティブタブの状態も拾え、セッション単位で
+        # 混同なく判定できる。API に届かない場合は文言方式へ自動で戻す。
+        "status_source": "api",
+        # v2 には /rename があるが、v1 と挙動を揃えて cwd + 最終更新で
+        # 突合する。命名手順を挟まない分、終了時の副作用が少ない。
+        "session_match": SESSION_MATCH_CWD_LATEST,
+        "start_command": "opencode2",
+        # 公式の案内は "opencode2 -s <sessionID>"。--session は同義の長形式。
+        "resume_command": "opencode2 --session {agent_session_id}",
+        # v1 と同じく、メッセージ送信までセッションが永続化されないため
+        # ID を採れないまま再起動するケースがある。ID 不要の --continue へ倒す。
+        "resume_command_fallback": "opencode2 --continue",
     },
 }
 
@@ -333,9 +455,108 @@ def get_agent_names() -> list[str]:
     -------
     list[str]
         Agent identifiers
-        (e.g. ``["claude", "codex", "copilot", "bob", "opencode"]``).
+        (e.g. ``["claude", "codex", "copilot", "bob", "opencode",
+        "opencode2"]``).
     """
     return list(AGENTS.keys())
+
+
+def in_same_pin_group(agent_key_a: str, agent_key_b: str) -> bool:
+    """2 つのエージェントが同じ PIN_GROUPS に属するかを返す。
+
+    同じグループに属する場合のみ、ゲート判定を pin（版確定パターン）で
+    上書きしてよい。
+
+    Parameters
+    ----------
+    agent_key_a : str
+        エージェント識別子。
+    agent_key_b : str
+        エージェント識別子。
+
+    Returns
+    -------
+    bool
+        同一グループに両方が含まれるなら ``True``。
+    """
+    for group in PIN_GROUPS:
+        if agent_key_a in group and agent_key_b in group:
+            return True
+    return False
+
+
+def get_status_source(agent_key: str) -> str:
+    """エージェントのステータス判定方式を返す。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。未登録キーも許容。
+
+    Returns
+    -------
+    str
+        ``STATUS_SOURCE_PATTERN`` または ``STATUS_SOURCE_API``。
+        未定義・未知の値は ``STATUS_SOURCE_PATTERN``。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return STATUS_SOURCE_PATTERN
+    value = agent.get("status_source")
+    if value == STATUS_SOURCE_API:
+        return STATUS_SOURCE_API
+    return STATUS_SOURCE_PATTERN
+
+
+def get_running_threshold_ms(agent_key: str, default_ms: int) -> int:
+    """running 判定に使う出力継続時間の閾値（ミリ秒）を返す。
+
+    エージェント定義に ``running_threshold_ms`` があればそれを、
+    無ければ *default_ms*（全体設定）を返す。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。未登録キーも許容。
+    default_ms : int
+        全体設定の既定値。
+
+    Returns
+    -------
+    int
+        閾値（ミリ秒）。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return default_ms
+    value = agent.get("running_threshold_ms")
+    if not isinstance(value, int) or value <= 0:
+        return default_ms
+    return value
+
+
+def get_running_min_cps(agent_key: str) -> int:
+    """running 判定に要求する平均出力レート（文字/秒）を返す。
+
+    未定義なら 0（レート判定を行わない）。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。未登録キーも許容。
+
+    Returns
+    -------
+    int
+        下限レート。0 なら判定しない。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return 0
+    value = agent.get("running_min_cps")
+    if not isinstance(value, int) or value <= 0:
+        return 0
+    return value
 
 
 def get_session_match_mode(agent_key: str) -> str:

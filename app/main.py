@@ -40,8 +40,11 @@ from source.session.session_manager import SessionManager  # noqa: E402
 from source.detection.agent_detector import AgentDetector  # noqa: E402
 from source.detection.agent_patterns import (  # noqa: E402
     AGENTS,
+    STATUS_SOURCE_API,
     get_resume_command,
+    get_status_source,
 )
+from source.opencode2.status_poller import Opencode2StatusPoller  # noqa: E402
 from source.notification.toast_notifier import ToastNotifier  # noqa: E402
 from source.notification.taskbar_flasher import TaskbarFlasher  # noqa: E402
 from source.notification.notification_manager import NotificationManager  # noqa: E402
@@ -140,6 +143,156 @@ def _on_pty_output(session_id: str, data: bytes) -> None:
             logger.debug("JS 転送に失敗 (ウィンドウが未準備の可能性)")
 
 
+def _get_terminal_info(session_id: str) -> dict | None:
+    """opencode2 の状態監視に必要なターミナル情報を返す。
+
+    ポーラーはこの情報を使って、ターミナルと opencode2 のセッションを
+    1 対 1 で束縛する。セッションが既に閉じられている場合は None を返し、
+    ポーラー側で監視対象から自動的に外させる。
+
+    Parameters
+    ----------
+    session_id : str
+        awt のセッション（ターミナル）ID。
+
+    Returns
+    -------
+    dict | None
+        ``{"cwd", "session_id", "started_at"}``。
+        ターミナルが存在しなければ None。
+    """
+    session = _session_manager.get_session(session_id)
+    if session is None:
+        return None
+
+    cwd = session.get("cwd", "")
+    bound_id = session.get("agent_session_id", "")
+    started_at = session.get("agent_started_at", "")
+    return {
+        "cwd": cwd if isinstance(cwd, str) else "",
+        "session_id": bound_id if isinstance(bound_id, str) else "",
+        "started_at": started_at if isinstance(started_at, str) else "",
+    }
+
+
+def _push_opencode2_title(session_id: str, name: str) -> None:
+    """awt のセッション名を opencode2 のタイトルへ反映する。
+
+    opencode2 は他ツールと違い REST API でタイトルを変更できるため、
+    終了時のキー送信を待たずに即座に揃えられる。失敗しても awt 側の
+    名前は変わったままにする（表示の一貫性より確実性を優先しない）。
+
+    Parameters
+    ----------
+    session_id : str
+        awt のセッション（ターミナル）ID。
+    name : str
+        新しい名前。
+    """
+    if _opencode2_poller is None or not name:
+        return
+    try:
+        if _agent_detector.get_agent(session_id) != "opencode2":
+            return
+        bound = _opencode2_poller.get_bound_session_id(session_id)
+        if not bound:
+            logger.debug(
+                "opencode2 セッション未束縛のためタイトル反映を見送り: "
+                "session=%s",
+                session_id,
+            )
+            return
+        ok = _opencode2_poller.rename_bound_session(session_id, name)
+        logger.info(
+            "opencode2 タイトル反映: session=%s, opencode2=%s, 結果=%s",
+            session_id,
+            bound,
+            "成功" if ok else "失敗",
+        )
+    except Exception:
+        logger.exception(
+            "opencode2 タイトル反映に失敗: session=%s", session_id
+        )
+
+
+def _on_opencode2_status(
+    session_id: str, status: str, detail: str, children: dict
+) -> None:
+    """opencode2 のポーラーから受け取った状態を detector へ渡す。
+
+    Parameters
+    ----------
+    session_id : str
+        awt のセッション（ターミナル）ID。
+    status : str
+        集約したステータス。
+    detail : str
+        セッション内訳の文字列。
+    children : dict
+        opencode2 のセッション ID をキーとする状態辞書。
+    """
+    logger.debug(
+        "opencode2 状態更新: session=%s, status=%s, 内訳=%s",
+        session_id,
+        status,
+        children,
+    )
+    # 到達不可から復旧した場合に備え、通知のたびに外部供給源を有効化する
+    _agent_detector.set_external_source_active(session_id, True)
+    _agent_detector.set_external_status(session_id, status, detail)
+
+
+def _on_opencode2_unavailable(session_id: str) -> None:
+    """opencode2 のサーバーへ到達できない間、画面文言による判定へ戻す。
+
+    Parameters
+    ----------
+    session_id : str
+        awt のセッション（ターミナル）ID。
+    """
+    _agent_detector.set_external_source_active(session_id, False)
+
+
+def _sync_opencode2_watch(
+    session_id: str, agent_key: str | None, event_type: str | None
+) -> None:
+    """agent_key に応じて opencode2 の状態監視を開始・停止する。
+
+    ``status_source`` が ``api`` のエージェントに切り替わったら監視を始め、
+    ゲート閉鎖や別ツールへの乗り換えで止める。
+
+    Parameters
+    ----------
+    session_id : str
+        セッション ID。
+    agent_key : str | None
+        現在のエージェント識別子。
+    event_type : str | None
+        ステータス変化のイベント種別。
+    """
+    if _opencode2_poller is None:
+        return
+
+    use_api = (
+        event_type != "gate_closed"
+        and agent_key is not None
+        and get_status_source(agent_key) == STATUS_SOURCE_API
+    )
+
+    try:
+        if use_api:
+            if not _opencode2_poller.is_watching(session_id):
+                _agent_detector.set_external_source_active(session_id, True)
+                _opencode2_poller.watch(session_id)
+        elif _opencode2_poller.is_watching(session_id):
+            _opencode2_poller.unwatch(session_id)
+            _agent_detector.set_external_source_active(session_id, False)
+    except Exception:
+        logger.exception(
+            "opencode2 状態監視の切り替えに失敗: session=%s", session_id
+        )
+
+
 def _on_status_change(
     session_id: str,
     status: str,
@@ -158,18 +311,31 @@ def _on_status_change(
     6. PTY 出力ログにマーカー行を記録
     """
     # 1. SessionManager 更新
+    # 「処理完了」の通知は running/waiting/error からの復帰に限る。
+    # 外部供給源（opencode2 の API）経由では event_type が "external" に
+    # なり、従来の ("shell_prompt", "debounce") の条件から漏れるため、
+    # 更新前のステータスを控えて遷移で判定する。
+    previous = _session_manager.get_session(session_id)
+    prev_status = previous.get("status", "idle") if previous else "idle"
     _session_manager.update_status(session_id, status, agent)
 
     # 1.5. agent_key の追跡（永続化用）
     agent_key = _agent_detector.get_agent(session_id)
     _session_manager.set_agent_key(session_id, agent_key)
-    # ゲート開放時刻を記録（終了時のセッション突合で下限として使う）
-    if event_type == "gate_opened":
+    # ゲート開放時刻を記録（終了時のセッション突合で下限として使う）。
+    # ツール乗り換え（agent_switched）も新しいツールの開始とみなす。
+    if event_type in ("gate_opened", "agent_switched"):
         _session_manager.set_agent_started_at(session_id)
     # ゲート閉鎖時は命名済みフラグと開放時刻をクリア
     if event_type == "gate_closed":
         _session_manager.set_agent_session_named(session_id, False)
         _session_manager.set_agent_started_at(session_id, "")
+    # ツール乗り換え時は前のツールの命名済みフラグを引き継がない
+    if event_type == "agent_switched":
+        _session_manager.set_agent_session_named(session_id, False)
+
+    # 1.6. opencode2 の状態監視（外部供給源）の開始・停止
+    _sync_opencode2_watch(session_id, agent_key, event_type)
 
     # 2. 非アクティブセッションは未読バッジ
     active_id = _session_manager.get_active_session_id()
@@ -207,8 +373,15 @@ def _on_status_change(
     session_name = session["name"] if session else session_id
     if status in ("waiting", "error"):
         _notification_manager.notify(session_id, session_name, status)
-    elif status == "idle" and event_type in ("shell_prompt", "debounce"):
-        # シェルプロンプト or デバウンス確定(running/waiting→idle) →「処理完了」として通知
+    elif status == "idle" and (
+        event_type in ("shell_prompt", "debounce")
+        or (
+            event_type == "external"
+            and prev_status in ("running", "waiting", "error")
+        )
+    ):
+        # シェルプロンプト / デバウンス確定 / 外部供給源での
+        # running・waiting・error → idle の遷移を「処理完了」として通知
         _notification_manager.notify(session_id, session_name, "completed")
 
     # 6. PTY 出力ログにステータス変更マーカーを記録
@@ -242,6 +415,9 @@ _pty_manager: PtyManager
 _session_store: SessionStore
 _session_manager: SessionManager
 _agent_detector: AgentDetector
+# opencode2 のローカル API から状態を取得するポーラー。
+# settings.json で無効化されている場合は None のまま。
+_opencode2_poller: Opencode2StatusPoller | None = None
 _toast_notifier: ToastNotifier
 _taskbar_flasher: TaskbarFlasher
 _notification_manager: NotificationManager
@@ -624,11 +800,11 @@ def _schedule_auto_resume() -> None:
     agent_key に応じた resume コマンドを直接シェルに送信する。
     復元方式はエージェント定義の ``session_match`` に従う。
     - name ベース (claude/copilot): 例 ``claude --resume "name"``
-    - ID ベース (codex/bob/opencode): 例 ``codex resume <id>``
+    - ID ベース (codex/bob/opencode/opencode2): 例 ``codex resume <id>``
 
     ID ベースで ``agent_session_id`` が未取得の場合は、
     ``resume_command_fallback`` が定義されていればそちらへ倒す
-    （opencode: ``opencode --continue``）。
+    （opencode: ``opencode --continue``、opencode2: ``opencode2 --continue``）。
     """
     for session in _session_manager.get_sessions():
         sid = session.get("id", "")
@@ -702,6 +878,7 @@ def main() -> None:
     global _window
     global _pty_manager, _session_store, _session_manager
     global _agent_detector
+    global _opencode2_poller
     global _toast_notifier, _taskbar_flasher, _notification_manager
     global _file_explorer, _session_recorder
     global _pty_output_logger
@@ -766,6 +943,17 @@ def main() -> None:
         ctrlc_window_ms=get("notification.ctrlc_window_ms", 1000),
     )
 
+    if get("opencode2.api_status_enabled", True):
+        _opencode2_poller = Opencode2StatusPoller(
+            on_status=_on_opencode2_status,
+            on_unavailable=_on_opencode2_unavailable,
+            get_terminal_info=_get_terminal_info,
+            interval_sec=get("opencode2.poll_interval_ms", 750) / 1000.0,
+        )
+        logger.info("opencode2 のローカル API による状態取得を有効化")
+    else:
+        logger.info("opencode2 のローカル API による状態取得は無効")
+
     _file_explorer = FileExplorer()
     _session_recorder = SessionRecorder(
         os.path.join(data_dir, "recording"),
@@ -792,6 +980,7 @@ def main() -> None:
         agent_detector=_agent_detector,
         on_pty_output=_on_pty_output,
         buffers_dir=_buffers_dir,
+        on_rename=_push_opencode2_title,
     )
 
     # ---- pywebview window ----
@@ -829,6 +1018,8 @@ def main() -> None:
 
     # ---- shutdown ----
     logger.info("アプリケーション終了処理を開始")
+    if _opencode2_poller is not None:
+        _opencode2_poller.stop_all()
     _session_manager.close_all()
     logger.info("Agent Watch Terminal 終了")
 

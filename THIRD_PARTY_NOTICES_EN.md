@@ -27,4 +27,4 @@ This project uses the following third-party libraries and assets.
 
 - All listed licenses are compatible with the MIT License under which this project is distributed.
 - Frontend libraries are bundled in `app/frontend/lib/`. See `app/frontend/lib/LICENSE_THIRD_PARTY.md` for additional details.
-- External AI tools (Claude Code, Codex CLI, GitHub Copilot CLI, Bob Shell, opencode) used within this terminal are **not** covered by this project's license. Please refer to each tool's own terms of use.
+- External AI tools (Claude Code, Codex CLI, GitHub Copilot CLI, Bob Shell, opencode, opencode2) used within this terminal are **not** covered by this project's license. Please refer to each tool's own terms of use.

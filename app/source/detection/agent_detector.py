@@ -33,7 +33,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from source.detection.agent_patterns import AGENTS, strip_ansi
+from source.detection.agent_patterns import (
+    AGENTS,
+    get_running_min_cps,
+    get_running_threshold_ms,
+    in_same_pin_group,
+    strip_ansi,
+)
 from source.detection.pattern_matcher import PatternMatcher
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,11 @@ class _SessionState:
     """Per-session internal state for the detector."""
 
     agent_key: str | None = None
+    # --- 版確定（pin） ---
+    # 打ち込まれた起動コマンドのエコーから確定したエージェントキー。
+    # opencode / opencode2 のように画面文言が共通で gate だけでは
+    # 版を判別できない組を切り分けるために保持する。
+    pinned_agent_key: str | None = None
     status: str = "idle"
     last_emitted_key: str = ""
     line_buffer: str = ""
@@ -71,6 +82,8 @@ class _SessionState:
     # --- デバウンス関連 ---
     debounce_timer: threading.Timer | None = field(default=None, repr=False)
     output_start_time: float | None = None
+    # output_start_time 以降に受け取った文字数。running のレート判定に使う。
+    output_bytes: int = 0
     last_output_time: float = 0.0
     # --- Ctrl+C 関連 ---
     ctrlc_count: int = 0
@@ -79,6 +92,11 @@ class _SessionState:
     # AI ツールが終了してシェルに戻った場合に True。
     # ゲート開放時に False にリセットされる。
     exited_to_shell: bool = False
+    # --- 外部ステータス供給源 ---
+    # True の間はステータスを外部（AI ツールの API）から受け取る。
+    # 文言ベースの waiting/error 判定と running 判定は抑止し、
+    # 2 つの供給源が互いを上書きし合わないようにする。
+    external_active: bool = False
 
 
 class AgentDetector:
@@ -201,6 +219,11 @@ class AgentDetector:
             # --- 出力開始時刻の初期化 ---
             if state.output_start_time is None and state.agent_key is not None:
                 state.output_start_time = time.time()
+                state.output_bytes = 0
+
+            # --- 出力量の加算（running のレート判定用）---
+            if state.output_start_time is not None:
+                state.output_bytes += len(normalized)
 
             # --- デバウンスタイマーのリセット ---
             if state.debounce_timer is not None:
@@ -346,6 +369,82 @@ class AgentDetector:
                 return False
             return state.agent_key is not None and not state.exited_to_shell
 
+    def set_external_source_active(
+        self, session_id: str, active: bool
+    ) -> None:
+        """外部ステータス供給源の有効・無効を切り替える。
+
+        有効の間、文言ベースの waiting/error 判定と出力スループットによる
+        running 判定を抑止する。ゲート判定（どのツールか）は従来どおり
+        PTY 出力から行うため影響しない。
+
+        Parameters
+        ----------
+        session_id : str
+            セッション ID。
+        active : bool
+            有効にするなら True。
+        """
+        with self._lock:
+            state = self._sessions.setdefault(session_id, _SessionState())
+            if state.external_active == active:
+                return
+            state.external_active = active
+            logger.info(
+                "セッション %s: 外部ステータス供給源を%s",
+                session_id,
+                "有効化" if active else "無効化",
+            )
+
+    def set_external_status(
+        self, session_id: str, status: str, detail: str = ""
+    ) -> None:
+        """外部供給源から受け取ったステータスを反映する。
+
+        重複するステータスは通知しない。``set_external_source_active`` で
+        有効化されていないセッションに対しては何もしない（文言方式へ
+        フォールバック中に外部の値が割り込まないようにするため）。
+
+        Parameters
+        ----------
+        session_id : str
+            セッション ID。
+        status : str
+            ``idle`` / ``running`` / ``waiting`` / ``error`` のいずれか。
+        detail : str
+            内訳などの補足文字列。通知本文とログに使う。
+        """
+        callback_args: tuple | None = None
+
+        with self._lock:
+            state = self._sessions.get(session_id)
+            if state is None or not state.external_active:
+                return
+
+            dedup_key = f"external:{status}:{detail}"
+            if dedup_key == state.last_emitted_key:
+                return
+            state.last_emitted_key = dedup_key
+
+            old_status = state.status
+            state.status = status
+            agent_name = self._get_agent_name_unlocked(session_id)
+
+            logger.info(
+                "セッション %s: 外部供給源からステータス更新 — %s -> %s (%s)",
+                session_id,
+                old_status,
+                status,
+                detail or "内訳なし",
+            )
+
+            callback_args = (
+                session_id, status, agent_name, detail, "external", None,
+            )
+
+        if callback_args is not None:
+            self._fire_callback(*callback_args)
+
     def reset_session(self, session_id: str) -> None:
         """Close the gate and reset detection state for *session_id*.
 
@@ -409,6 +508,61 @@ class AgentDetector:
         stripped = strip_ansi(raw_line)
         return [f.strip() for f in stripped.split("\r") if f.strip()]
 
+    def _resolve_gate_agent(
+        self,
+        session_id: str,
+        state: _SessionState,
+        line: str,
+    ) -> str | None:
+        """ゲート判定を行い、版の取り違えを pin で補正して返す。
+
+        画面文言ベースのゲートは opencode / opencode2 のように版違いで
+        共通のため、そのままでは取り違える。先に観測した起動コマンドの
+        エコー（pin）が同じ PIN_GROUPS に属していれば、そちらを優先する。
+
+        pin の観測はゲートが開くかどうかに関係なく毎行行う。エコー行と
+        TUI バナー行が別の行で届くのが通常のため。
+
+        ロック内で呼ばれる。
+
+        Parameters
+        ----------
+        session_id : str
+            セッション ID（ログ用）。
+        state : _SessionState
+            対象セッションの内部状態。
+        line : str
+            ANSI 除去済みの 1 行。
+
+        Returns
+        -------
+        str | None
+            採用するエージェントキー。ゲートが開かない場合は ``None``。
+        """
+        pinned = self._matcher.check_pin(line)
+        if pinned is not None:
+            state.pinned_agent_key = pinned
+
+        agent_key = self._matcher.check_gate(line)
+        if agent_key is None:
+            return None
+
+        pin = state.pinned_agent_key
+        if (
+            pin is not None
+            and pin != agent_key
+            and in_same_pin_group(pin, agent_key)
+        ):
+            logger.info(
+                "セッション %s: ゲート判定を pin で補正 — %s -> %s",
+                session_id,
+                agent_key,
+                pin,
+            )
+            return pin
+
+        return agent_key
+
     def _process_line(
         self,
         session_id: str,
@@ -448,7 +602,7 @@ class AgentDetector:
 
         # --- Step 1: Gate check (gate closed) ----------------------------
         if state.agent_key is None:
-            agent_key = self._matcher.check_gate(line)
+            agent_key = self._resolve_gate_agent(session_id, state, line)
             if agent_key is not None:
                 state.agent_key = agent_key
                 state.status = "idle"
@@ -466,8 +620,45 @@ class AgentDetector:
             if state.agent_key is None:
                 return None
 
+        # --- Step 1.5: シェル復帰後のツール乗り換え検出 -------------------
+        # AI ツールを終了して同じタブで別のツールを起動した場合、
+        # agent_key が古いままだと自動復元で誤ったコマンドを送ってしまう
+        # （例: opencode を使った後に opencode2 を起動しても
+        # ``opencode --continue`` が送られる）。
+        #
+        # 再判定はシェルへ戻った後（exited_to_shell）に限定する。
+        # AI ツールの動作中に再判定すると、出力本文に含まれる他ツールの
+        # 名前で乗り換えたと誤認するため。
+        elif state.exited_to_shell:
+            switched_key = self._resolve_gate_agent(session_id, state, line)
+            if switched_key is not None:
+                if switched_key != state.agent_key:
+                    old_key = state.agent_key
+                    state.agent_key = switched_key
+                    state.status = "idle"
+                    state.exited_to_shell = False
+                    state.recent_output = []
+                    state.recent_output_size = 0
+                    state.output_start_time = None
+                    state.output_bytes = 0
+                    new_status = "idle"
+                    matched_text = line
+                    event_type = "agent_switched"
+                    logger.info(
+                        "セッション %s: ツール乗り換えを検出 — %s -> %s, "
+                        "line=%r",
+                        session_id,
+                        old_key,
+                        switched_key,
+                        line,
+                    )
+                else:
+                    # 同じツールを起動し直しただけ。ゲートは開いたまま、
+                    # シェル復帰フラグのみ解除する。
+                    state.exited_to_shell = False
+
         # --- Step 2: Shell prompt check → idle 即時確定 -------------------
-        if event_type != "gate_opened":
+        if event_type not in ("gate_opened", "agent_switched"):
             completed_pattern = self._matcher.check_completed(line)
             if completed_pattern is not None:
                 new_status = "idle"
@@ -481,6 +672,7 @@ class AgentDetector:
                     state.debounce_timer.cancel()
                     state.debounce_timer = None
                 state.output_start_time = None
+                state.output_bytes = 0
                 # リングバッファをクリア（前タスクの stale データで
                 # デバウンス再発火時に waiting 誤検出するのを防止）
                 state.recent_output = []
@@ -593,7 +785,7 @@ class AgentDetector:
 
         # --- Gate 未開放: gate パターンを試行 --------------------------------
         if state.agent_key is None:
-            agent_key = self._matcher.check_gate(line)
+            agent_key = self._resolve_gate_agent(session_id, state, line)
             if agent_key is None:
                 return None
 
@@ -638,6 +830,7 @@ class AgentDetector:
                 state.debounce_timer.cancel()
                 state.debounce_timer = None
             state.output_start_time = None
+            state.output_bytes = 0
             # リングバッファをクリア（前タスクの stale データで
             # デバウンス再発火時に waiting 誤検出するのを防止）
             state.recent_output = []
@@ -684,6 +877,12 @@ class AgentDetector:
 
             # ゲートが閉じている → 何もしない
             if state.agent_key is None:
+                return
+
+            # 外部供給源が有効な間は、文言ベースの判定を行わない
+            if state.external_active:
+                state.output_start_time = None
+                state.output_bytes = 0
                 return
 
             agent_key_for_key = state.agent_key or ""
@@ -778,6 +977,7 @@ class AgentDetector:
 
             # 発火後のリセット
             state.output_start_time = None
+            state.output_bytes = 0
 
         # ロック外でコールバック発火
         if callback_args is not None:
@@ -926,19 +1126,49 @@ class AgentDetector:
         if state.agent_key is None:
             return None
 
+        # 外部供給源が有効な間は、出力量からの running 判定を行わない
+        if state.external_active:
+            return None
+
         # 出力開始時刻が未設定 → 何もしない
         if state.output_start_time is None:
             return None
 
-        # 閾値の選択
-        if state.status in ("waiting", "error"):
+        # 閾値の選択。復帰時はエージェント別設定ではなく全体設定を使う
+        # （待ち状態から抜けたことを素早く反映するための短い値のため）。
+        if state.status == "error":
+            threshold = self._error_recovery_sec
+        elif state.status == "waiting":
             threshold = self._waiting_recovery_sec
         else:
-            threshold = self._running_threshold_sec
+            threshold = (
+                get_running_threshold_ms(
+                    state.agent_key,
+                    int(self._running_threshold_sec * 1000),
+                )
+                / 1000.0
+            )
 
         elapsed = time.time() - state.output_start_time
         if elapsed < threshold:
             return None
+
+        # 出力レートの下限（エージェント任意設定）。
+        # 継続時間だけで判定すると、TUI の入力欄でタイプしている間の
+        # 再描画まで running と見なしてしまう。閾値を下げたエージェントでは
+        # レートを併用して「人が打っている」と「AI が生成している」を分ける。
+        min_cps = get_running_min_cps(state.agent_key)
+        if min_cps > 0 and elapsed > 0:
+            cps = state.output_bytes / elapsed
+            if cps < min_cps:
+                logger.debug(
+                    "セッション %s: 出力レートが下限未満のため running 抑止 "
+                    "(%.0f < %d 文字/秒)",
+                    session_id,
+                    cps,
+                    min_cps,
+                )
+                return None
 
         # 既に running → 重複防止
         if state.status == "running":
@@ -1046,6 +1276,8 @@ class AgentDetector:
             state.debounce_timer.cancel()
             state.debounce_timer = None
         state.agent_key = None
+        state.pinned_agent_key = None
+        state.external_active = False
         state.status = "idle"
         state.exited_to_shell = False
         state.last_emitted_key = ""
@@ -1053,6 +1285,7 @@ class AgentDetector:
         state.recent_output = []
         state.recent_output_size = 0
         state.output_start_time = None
+        state.output_bytes = 0
         state.last_output_time = 0.0
         state.ctrlc_count = 0
         state.ctrlc_last_time = 0.0
