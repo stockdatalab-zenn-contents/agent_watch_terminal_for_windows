@@ -68,6 +68,16 @@ const TERMINAL_OPTIONS = {
 };
 
 /* ------------------------------------------------------------------ */
+/*  マウス報告の判別                                                   */
+/* ------------------------------------------------------------------ */
+
+// SGR 形式（DECSET 1006）のマウス報告。
+// 例: ESC[<0;12;3M（押下） / ESC[<64;12;3M（ホイール上）
+// AI ツールは 3 種とも 1006 を要求するため、実際に流れるのはこの形式のみ。
+// 1006 を使わない場合は onBinary 経由になり、awt は転送していない。
+const MOUSE_REPORT_RE = /^\x1b\[<\d+;\d+;\d+[Mm]$/;
+
+/* ------------------------------------------------------------------ */
 /*  TerminalManager                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -75,6 +85,9 @@ const TerminalManager = {
 
   /** @type {Object.<string, {term: Terminal, fitAddon: FitAddon, container: HTMLElement}>} */
   terminals: {},
+
+  /** Shift を押しながらマウスを操作している間だけ true。 */
+  _mouseShiftHeld: false,
 
   /* ---- applySettings -------------------------------------------- */
 
@@ -221,12 +234,18 @@ const TerminalManager = {
     // 3.6. 代替画面バッファへの取り残し対策
     this._installAltScreenGuard(term);
 
+    // 3.7. Shift+ドラッグを選択専用にする
+    this._trackShiftDrag(container);
+
     // 4. Mount into DOM
     term.open(container);
     fitAddon.fit();
 
     // 5. Keyboard input -> Python backend
+    var self = this;
     term.onData(async function (data) {
+      // Shift 押下中のマウス報告は AI ツールへ渡さない
+      if (self._isSuppressedMouseReport(data)) return;
       if (window.pywebview && window.pywebview.api) {
         await window.pywebview.api.send_input(sessionId, data);
       }
@@ -236,6 +255,49 @@ const TerminalManager = {
     this.terminals[sessionId] = { term: term, fitAddon: fitAddon, serializeAddon: serializeAddon, container: container };
 
     return term;
+  },
+
+  /* ---- Shift+ドラッグの選択 (private) ------------------------------ */
+
+  /**
+   * Shift を押しながらのマウス操作かどうかを記録する。
+   *
+   * マウストラッキングが有効なとき、xterm.js の選択サービスは無効化され、
+   * 押下時のみ shouldForceSelection（Windows では shiftKey）で選択を
+   * 強制できる。ところがドラッグ中の移動報告は Shift を考慮しない。
+   *
+   *   mousedrag: e => { e.buttons && i(e) }   // DRAG / ANY で登録
+   *   mousemove: e => { e.buttons || i(e) }   // ANY で登録
+   *
+   * そのため Shift+ドラッグで選択している最中も AI ツールへ報告が届き、
+   * ツール側が反応して再描画すると選択が壊れる。ここで Shift の状態を
+   * 拾い、onData 側で報告を落とす。
+   *
+   * @param {HTMLElement} container - ターミナルのラッパー要素
+   */
+  _trackShiftDrag(container) {
+    var self = this;
+    var update = function (e) {
+      self._mouseShiftHeld = e.shiftKey === true;
+    };
+    // xterm.js のリスナーより先に状態を更新するためキャプチャで拾う。
+    ['mousedown', 'mousemove', 'mouseup'].forEach(function (type) {
+      container.addEventListener(type, update, true);
+    });
+  },
+
+  /**
+   * PTY へ送らずに捨てるべきマウス報告かどうかを返す。
+   *
+   * マウス報告は triggerMouseEvent -> triggerDataEvent -> onData を
+   * 通るため、ここで落とせば PTY へ届かない。Shift を押していない
+   * 通常のマウス操作（ホイールでの出力欄スクロール等）は素通しする。
+   *
+   * @param {string} data - onData が渡す入力データ
+   * @returns {boolean} 捨てるなら true
+   */
+  _isSuppressedMouseReport(data) {
+    return this._mouseShiftHeld && MOUSE_REPORT_RE.test(data);
   },
 
   /* ---- TUI モード制御 (private) ----------------------------------- */

@@ -72,7 +72,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F01-02 | | 代替画面の取り残し対策 | TUI が `ESC[?1049l` を出さずに落ちた場合、シェルのプロンプトが出す OSC 7 を契機に通常バッファへ強制復帰 | `frontend/js/terminal_manager.js` |
 | F01-02 | | カーソル可視化 | block カーソルの配色を `!important` で上書きし、truecolor セルの inline style に負けて不可視になる問題を防止（opencode は DECSCUSR `ESC[1 q` で block カーソルを要求） | `frontend/css/terminal.css` |
 | F01-02 | | カスタムスクロールバー | xterm 標準スクロールバーを独自オーバーレイに置換（ドラッグ・クリック操作対応）。代替画面中はスクロールバックが無いため自動的に非表示になり、ホイールは xterm.js がカーソルキーへ変換して TUI 内スクロールとして働く | `frontend/js/scrollbar.js` |
-| F01-03 | クリップボード操作 | テキスト選択 | TUI 実行中は左ドラッグがマウストラッキングに消費されるため、Shift + ドラッグで選択する | `frontend/lib/xterm/xterm.js` |
+| F01-03 | クリップボード操作 | テキスト選択 | TUI 実行中は左ドラッグがマウストラッキングに消費されるため、Shift + ドラッグで選択する。Shift 押下中は `onData` でマウス報告を落とし、AI ツールへ渡さない（xterm.js はドラッグ中の移動報告に Shift を反映しないため） | `frontend/js/terminal_manager.js` |
 | F01-03 | | コピー | 右クリック時、選択テキストをクリップボードへコピー | `frontend/js/context_menu.js` |
 | F01-03 | | ペースト | 右クリック時（選択なし）、クリップボード内容を PTY へ送信 | `frontend/js/context_menu.js` |
 | F01-03 | | 右クリック報告の抑止 | 右クリックの押下・離しをキャプチャフェーズで止め、AI ツールへマウス報告が届かないようにする。AI ツール側にも右クリック貼り付けがあると二重に貼られるため（Claude Code / Copilot CLI で発生） | `frontend/js/context_menu.js` |
