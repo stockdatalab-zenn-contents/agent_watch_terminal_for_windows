@@ -343,8 +343,16 @@ class Opencode2StatusPoller:
         # 既に他のターミナルが握っている ID は取り合いにしない
         claimed = set(bound.values())
 
-        # 束縛の結果が実行順に依存しないよう、決定的な順序で処理する
-        for terminal_id in sorted(infos.keys()):
+        # 起動が新しいターミナルから処理する。awt のセッション ID は
+        # ランダムな UUID で起動順と無関係なため、ID 順に処理すると
+        # 先に処理されたターミナルが後発のセッションを奪ってしまう。
+        # started_at が同着・未設定の場合は terminal_id で安定させる。
+        ordered = sorted(
+            infos.keys(),
+            key=lambda t: (infos[t]["started_at"], t),
+            reverse=True,
+        )
+        for terminal_id in ordered:
             info = infos[terminal_id]
             pack = fetched.get(info["norm"], {})
             sessions = pack.get("sessions", [])
@@ -510,6 +518,30 @@ def _session_updated_ms(session: dict) -> int:
     return 0
 
 
+def _session_created_ms(session: dict) -> int:
+    """セッションの作成時刻（epoch ミリ秒）を取り出す。
+
+    Parameters
+    ----------
+    session : dict
+        セッション情報。
+
+    Returns
+    -------
+    int
+        epoch ミリ秒。取れなければ 0。
+    """
+    time_info = session.get("time")
+    if isinstance(time_info, dict):
+        value = time_info.get("created")
+        if isinstance(value, (int, float)):
+            return int(value)
+    value = session.get("time_created")
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
 def _iso_to_ms(text: str) -> int:
     """ISO 8601 文字列を epoch ミリ秒へ変換する。
 
@@ -540,8 +572,16 @@ def _infer_session_id(
 ) -> str:
     """ターミナルに束縛するセッションを推定する。
 
-    cwd が一致し、ゲート開放時刻以降に更新され、他のターミナルがまだ
-    握っていないセッションのうち、最終更新が新しいものを選ぶ。
+    cwd が一致し、他のターミナルがまだ握っていないセッションから、
+    次の 2 段階で選ぶ。
+
+    1. ゲート開放後に **作られた** セッションのうち、作成が最も早いもの。
+       ターミナルを起動して新しく会話を始めた通常のケース。作成が最も
+       早いものを選ぶことで、後から起動した別のターミナルのセッションを
+       先に起動したターミナルが奪わない（処理順に依存しない）。
+    2. 1 に該当しなければ、ゲート開放後に **更新された** セッションの
+       うち最新のもの。``opencode2 --continue`` などで過去のセッションを
+       手動で再開したケースを拾う。
 
     Parameters
     ----------
@@ -561,8 +601,11 @@ def _infer_session_id(
     """
     lower_bound = _iso_to_ms(started_at)
 
-    best_id = ""
-    best_updated = -1
+    created_id = ""
+    created_best: int | None = None
+    updated_id = ""
+    updated_best = -1
+
     for session in sessions:
         session_id = session.get("id")
         if not isinstance(session_id, str) or not session_id:
@@ -571,13 +614,25 @@ def _infer_session_id(
             continue
         if _session_directory(session) != directory:
             continue
+
         updated = _session_updated_ms(session)
-        if lower_bound and updated < lower_bound:
+        if not lower_bound:
+            # 下限が無い場合は従来どおり最終更新が新しいものを選ぶ
+            if updated > updated_best:
+                updated_best = updated
+                updated_id = session_id
             continue
-        if updated > best_updated:
-            best_updated = updated
-            best_id = session_id
-    return best_id
+
+        created = _session_created_ms(session)
+        if created and created >= lower_bound:
+            if created_best is None or created < created_best:
+                created_best = created
+                created_id = session_id
+        if updated >= lower_bound and updated > updated_best:
+            updated_best = updated
+            updated_id = session_id
+
+    return created_id or updated_id
 
 
 def build_children_for_session(

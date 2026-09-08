@@ -108,6 +108,14 @@ SESSION_MATCH_CWD_LATEST: str = "cwd_latest"
 #
 # 例: ``opencode2`` を起動 → エコー行で pin=opencode2 → 数行あとの
 #     "Ask anything…" で gate=opencode → 同グループなので opencode2 に補正。
+#
+# pin_patterns がプロンプト直後だけでなく **行末** も見るのは、PowerShell
+# (PSReadLine) が 1 打鍵ごとに入力行を再描画するため。ANSI 除去後は部分
+# 再描画が連結され、次のようにコマンド名の直前がプロンプト文字でなくなる。
+#
+#   PS C:\work> oopopeopenopencopencoopencodopencodeopencode2
+#
+# 打ち終えたコマンドは常に行の末尾に来るので、行末アンカーで拾う。
 # ---------------------------------------------------------------------------
 
 PIN_GROUPS: list[set[str]] = [
@@ -253,8 +261,10 @@ AGENTS: dict[str, AgentDict] = {
             r"|(?:--continue|-c)(?![\w-]))",
         ],
         # 版確定パターン。``(?![\w-])`` により "opencode2" には当たらない。
+        # 行末アンカーの選択肢を持つ理由は PIN_GROUPS の説明を参照。
         "pin_patterns": [
-            r"(?:^|[>$#]\s*)opencode(?![\w-])",
+            r"(?:(?:^|[>$#]\s*)opencode(?![\w-])"
+            r"|opencode(?![\w-])\s*$)",
         ],
         "status_patterns": {
             "waiting": [
@@ -319,8 +329,10 @@ AGENTS: dict[str, AgentDict] = {
         ],
         # 打ち込まれたコマンド名そのもの。フラグの有無を問わず拾う。
         # 直後に語構成文字が続く場合（"opencode2x" 等）は除外する。
+        # 行末アンカーの選択肢を持つ理由は PIN_GROUPS の説明を参照。
         "pin_patterns": [
-            r"(?:^|[>$#]\s*)opencode2(?![\w-])",
+            r"(?:(?:^|[>$#]\s*)opencode2(?![\w-])"
+            r"|opencode2\s*$)",
         ],
         "status_patterns": {
             "waiting": [
