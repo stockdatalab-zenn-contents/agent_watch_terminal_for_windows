@@ -354,6 +354,18 @@ AGENTS: dict[str, AgentDict] = {
         # keybind の app_exit は v1 と同一（"ctrl+c,ctrl+d,<leader>q"）で
         # Ctrl+C 1 回で終了。中断は Esc に割当（実機確認済み）。
         "ctrlc_to_close": 1,
+        # awt でセッションを閉じるとき、PTY を閉じる前に送るキー列。
+        # opencode2 のタブは cwd ごとに
+        # ~/.local/state/opencode/beta/tui/tabs.json へ永続化されるため、
+        # PTY を殺すだけではタブが残り、次の起動で復活して溜まり続ける。
+        # session.tab.close を送って閉じさせる（セッションは削除されない）。
+        #
+        # "\x18" は Ctrl+X。~/.config/opencode/cli.json の
+        #   "leader": "ctrl+x"
+        #   "session.tab.close": "<leader>w"
+        # に対応する。cli.json でこのどちらかを変えた場合は、
+        # ここも合わせて変更する必要がある。
+        "close_tab_keys": "\x18w",
         # opencode2 は 1 ターン 2 秒前後で終わることが多く、既定の
         # 3000ms では running が一度も立たないまま idle に戻る（実測）。
         "running_threshold_ms": 800,
@@ -495,6 +507,30 @@ def in_same_pin_group(agent_key_a: str, agent_key_b: str) -> bool:
         if agent_key_a in group and agent_key_b in group:
             return True
     return False
+
+
+def get_close_tab_keys(agent_key: str) -> str:
+    """セッションを閉じる直前に PTY へ送るキー列を返す。
+
+    AI ツール側にタブの概念があり、awt でセッションを閉じたときに
+    そのタブも閉じたい場合に使う。定義が無いエージェントでは空文字を
+    返し、呼び出し側は何も送らない。
+
+    Parameters
+    ----------
+    agent_key : str
+        エージェント識別子。未登録キーも許容。
+
+    Returns
+    -------
+    str
+        送出するキー列。未定義なら空文字。
+    """
+    agent = AGENTS.get(agent_key)
+    if not agent:
+        return ""
+    value = agent.get("close_tab_keys")
+    return value if isinstance(value, str) else ""
 
 
 def get_status_source(agent_key: str) -> str:

@@ -66,6 +66,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F01-01 | | PTY リサイズ | ウィンドウ・パネルサイズ変更時に PTY の cols/rows を同期 | `pty/pty_manager.py` |
 | F01-01 | | 初期寸法の一致 | PTY 生成と xterm.js 生成の両方が `settings.json` の `terminal.initial_cols` / `initial_rows` を読み、実サイズへ fit されるまでの寸法不一致を防止（非アクティブセッションはタブ切替まで fit されないため） | `session/session_manager.py`, `frontend/js/terminal_manager.js` |
 | F01-01 | | PTY 破棄 | セッション削除・アプリ終了時にプロセスを安全に終了 | `pty/pty_manager.py` |
+| F01-01 | | AI ツール側のタブ連動 | セッション削除時、PTY を閉じる前に `close_tab_keys`（opencode2 は `Ctrl+X`→`W`）を送り、AI ツール側のタブも閉じる。タブは cwd ごとに永続化されるため、送らないと次回起動で復活して溜まり続ける。セッション自体は削除されない | `api.py`, `detection/agent_patterns.py` |
 | F01-02 | ターミナル描画 | xterm.js 描画 | PTY 出力を xterm.js で画面描画（Base64 転送） | `frontend/js/terminal_manager.js` |
 | F01-02 | | TUI モードの透過 | 代替スクリーンバッファ (1049/47/1047) とマウストラッキング (1000/1002/1003) をいずれも遮断せず TUI へ通す。代替画面を遮断すると全画面描画が通常バッファへ流れ込みスクロールバックが崩れ、マウストラッキングを遮断すると TUI がホイールを受け取れず出力欄がスクロールしないため | `frontend/js/terminal_manager.js` |
 | F01-02 | | 代替画面の取り残し対策 | TUI が `ESC[?1049l` を出さずに落ちた場合、シェルのプロンプトが出す OSC 7 を契機に通常バッファへ強制復帰 | `frontend/js/terminal_manager.js` |

@@ -33,6 +33,26 @@ While an AI tool is running, mouse input is passed through to the AI tool. Opera
 
 In a plain shell with no AI tool running, dragging without Shift also selects text.
 
+## Notes for opencode2
+opencode2 keeps session tabs along the top of its screen. These tabs are stored per working
+directory in `~/.local/state/opencode/beta/tui/tabs.json`, so simply closing the terminal leaves
+the tab behind, and it reappears on the next launch and keeps accumulating.
+
+Agent Watch Terminal therefore sends the tab-close key (`Ctrl+X` then `W`) to opencode2 before
+closing the terminal when you click the "x" in the session list. The session itself is not
+deleted -- only the tab is closed.
+
+**This behavior depends on the following two settings in `~/.config/opencode/cli.json`:**
+
+| Setting              | Default     |
+| -------------------- | ----------- |
+| `leader`             | `ctrl+x`    |
+| `session.tab.close`  | `<leader>w` |
+
+**If you change either of them, the tab will no longer be closed.**
+In that case, update `close_tab_keys` in the opencode2 entry of
+`app/source/detection/agent_patterns.py` to match your new key binding.
+
 # 3. Key Features
 Agent Watch Terminal's main features are "automatic detection and status tracking of AI agents" and "management of multiple terminal sessions".
 Even when using multiple AI tools in parallel, you can check the status of each session at a glance.

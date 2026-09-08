@@ -41,6 +41,7 @@ from source.detection.agent_detector import AgentDetector  # noqa: E402
 from source.detection.agent_patterns import (  # noqa: E402
     AGENTS,
     STATUS_SOURCE_API,
+    get_close_tab_keys,
     get_resume_command,
     get_status_source,
 )
@@ -213,6 +214,56 @@ def _push_opencode2_title(session_id: str, name: str) -> None:
         logger.exception(
             "opencode2 タイトル反映に失敗: session=%s", session_id
         )
+
+
+# AI ツールにキー列を送ってから PTY を閉じるまでの待ち時間（秒）。
+# opencode2 は tabs.json への反映が即時（実測 0.6 秒以内）なので、
+# 余裕を見てこの値とする。長くすると × の反応が鈍くなる。
+_CLOSE_TAB_WAIT_SEC = 0.6
+
+
+def _close_agent_tab(session_id: str) -> None:
+    """セッション削除の直前に、AI ツール側のタブを閉じる。
+
+    opencode2 のタブは cwd ごとに tabs.json へ永続化されるため、
+    PTY を殺すだけではタブが残り、次回起動で復活して溜まり続ける。
+    PTY がまだ生きているうちに session.tab.close のキー列を送る。
+
+    キー列を持たないエージェント、および TUI が動いていない
+    （シェルに戻っている）セッションでは何もしない。
+
+    Parameters
+    ----------
+    session_id : str
+        削除対象の awt セッション（ターミナル）ID。
+    """
+    try:
+        agent_key = _agent_detector.get_agent(session_id)
+    except Exception:
+        logger.debug("エージェント判定に失敗: session=%s", session_id)
+        return
+    if not agent_key:
+        return
+
+    keys = get_close_tab_keys(agent_key)
+    if not keys:
+        return
+
+    try:
+        _pty_manager.write(session_id, keys)
+    except Exception:
+        logger.exception(
+            "タブを閉じるキーの送出に失敗: session=%s, agent=%s",
+            session_id,
+            agent_key,
+        )
+        return
+
+    logger.info(
+        "タブを閉じるキーを送出: session=%s, agent=%s", session_id, agent_key
+    )
+    # AI ツール側が処理して状態を書き出すまで待つ。
+    time.sleep(_CLOSE_TAB_WAIT_SEC)
 
 
 def _on_opencode2_status(
@@ -981,6 +1032,7 @@ def main() -> None:
         on_pty_output=_on_pty_output,
         buffers_dir=_buffers_dir,
         on_rename=_push_opencode2_title,
+        on_remove=_close_agent_tab,
     )
 
     # ---- pywebview window ----

@@ -55,6 +55,10 @@ class Api:
     on_rename : Callable[[str, str], None] | None
         セッション名変更後に呼ばれるコールバック。AI ツール側へ
         名前を反映する用途で main.py から注入される。省略可。
+    on_remove : Callable[[str], None] | None
+        セッション削除の直前に呼ばれるコールバック。PTY がまだ生きて
+        いる状態で AI ツール側の後始末（タブを閉じる等）を行う用途で
+        main.py から注入される。省略可。
     """
 
     def __init__(
@@ -68,6 +72,7 @@ class Api:
         buffers_dir: str = "",
         agent_detector: "AgentDetector | None" = None,
         on_rename: Callable[[str, str], None] | None = None,
+        on_remove: Callable[[str], None] | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._pty_manager = pty_manager
@@ -78,6 +83,7 @@ class Api:
         self._buffers_dir = buffers_dir
         self._agent_detector = agent_detector
         self._on_rename = on_rename
+        self._on_remove = on_remove
 
     # ==================================================================
     # 初期化一括取得 (JS から呼び出し)
@@ -177,6 +183,15 @@ class Api:
             削除成功なら ``True``。
         """
         try:
+            # PTY を閉じる前に AI ツール側の後始末を済ませる。
+            # 閉じた後では PTY へキーを送れないため順序が重要。
+            if self._on_remove is not None:
+                try:
+                    self._on_remove(session_id)
+                except Exception:
+                    logger.exception(
+                        "remove の外部反映に失敗: session=%s", session_id
+                    )
             result = self._session_manager.remove_session(session_id)
             if result:
                 self._delete_terminal_buffer(session_id)
