@@ -75,6 +75,7 @@ AIコーディングツール専用の「見守りターミナル」。
 | F01-03 | クリップボード操作 | テキスト選択 | TUI 実行中は左ドラッグがマウストラッキングに消費されるため、Shift + ドラッグで選択する | `frontend/lib/xterm/xterm.js` |
 | F01-03 | | コピー | 右クリック時、選択テキストをクリップボードへコピー | `frontend/js/context_menu.js` |
 | F01-03 | | ペースト | 右クリック時（選択なし）、クリップボード内容を PTY へ送信 | `frontend/js/context_menu.js` |
+| F01-03 | | 右クリック報告の抑止 | 右クリックの押下・離しをキャプチャフェーズで止め、AI ツールへマウス報告が届かないようにする。AI ツール側にも右クリック貼り付けがあると二重に貼られるため（Claude Code / Copilot CLI で発生） | `frontend/js/context_menu.js` |
 | F01-04 | リサイズ処理 | ウィンドウリサイズ | ウィンドウサイズ変更をデバウンス（100ms）して xterm.fit() 実行 | `frontend/js/resize_handler.js` |
 | F01-04 | | サイドバー幅調整 | ドラッグハンドルによるサイドバー幅変更（最小・最大制約あり） | `frontend/js/resize_handler.js` |
 | F01-04 | | パネル高さ調整 | セッション一覧・ファイルエクスプローラ間の垂直分割ドラッグ | `frontend/js/resize_handler.js` |

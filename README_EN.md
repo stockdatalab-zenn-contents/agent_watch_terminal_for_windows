@@ -29,7 +29,7 @@ While an AI tool is running, mouse input is passed through to the AI tool. Opera
 | ------------------ | ----------------------------------------------------------------------------------- |
 | Wheel              | Scrolls the AI tool's output pane.                                                   |
 | **Shift + drag**   | **Selects text. While an AI tool is running, dragging without Shift does not select.** |
-| Right click        | Copies the selected text, or pastes the clipboard contents when nothing is selected.  |
+| Right click        | Copies the selected text, or pastes the clipboard contents when nothing is selected. Right clicks are not forwarded to the AI tool, so nothing happens twice when the tool also acts on them. |
 
 In a plain shell with no AI tool running, dragging without Shift also selects text.
 
