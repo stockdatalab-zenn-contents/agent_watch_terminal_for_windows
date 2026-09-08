@@ -22,6 +22,17 @@ python main.py
 If it starts successfully, the following screen will be displayed:
 ![Initial screen](./docs/readme/en/initial_screen.png)
 
+## Mouse operations
+While an AI tool is running, mouse input is passed through to the AI tool. Operations therefore follow the same conventions as a regular terminal:
+
+| Operation          | Behavior                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| Wheel              | Scrolls the AI tool's output pane.                                                   |
+| **Shift + drag**   | **Selects text. While an AI tool is running, dragging without Shift does not select.** |
+| Right click        | Copies the selected text, or pastes the clipboard contents when nothing is selected.  |
+
+In a plain shell with no AI tool running, dragging without Shift also selects text.
+
 # 3. Key Features
 Agent Watch Terminal's main features are "automatic detection and status tracking of AI agents" and "management of multiple terminal sessions".
 Even when using multiple AI tools in parallel, you can check the status of each session at a glance.

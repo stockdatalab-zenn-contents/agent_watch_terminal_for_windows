@@ -193,9 +193,9 @@ const TerminalManager = {
     const serializeAddon = new SerializeAddon.SerializeAddon();
     term.loadAddon(serializeAddon);
 
-    // 3.5. TUI エスケープシーケンスの取り扱い
+    // 3.5. TUI が要求するモードはすべて通す
     //
-    // Alternate screen buffer (1049, 47, 1047) は通す。
+    // Alternate screen buffer (1049, 47, 1047):
     //   ブロックすると TUI の全画面描画が通常バッファへ流れ込む。
     //   TUI は画面消去（ESC[2J / ESC[K）を出さず代替画面の切替に
     //   任せる設計のため、前のフレームが残る・横幅変更時の reflow で
@@ -203,13 +203,20 @@ const TerminalManager = {
     //   scrollback へ焼き付く。代替画面は scrollback を持たないので、
     //   通せば履歴を一切汚さない。
     //
-    // Mouse tracking (1000, 1002, 1003) はブロックする。
-    //   有効化されると左クリック+ドラッグが xterm.js の selection では
-    //   なくマウストラッキングに消費され、term.getSelection() が常に空
-    //   になって右クリックコピーが動作しなくなるため。右クリックも
-    //   マウスシーケンスとして PTY へ送られなくなり、contextmenu
-    //   ハンドラーとの二重動作も避けられる。
-    this._installModeFilter(term);
+    // Mouse tracking (1000, 1002, 1003):
+    //   ブロックすると TUI がホイールを受け取れない。代替画面では
+    //   xterm.js がホイールをカーソルキー（ESC[A / ESC[B）へ変換して
+    //   PTY へ送るため、TUI はそれをチャット欄の操作として扱い、
+    //   出力欄が動かなくなる。この変換は xterm.js 5.3.0 に
+    //   ハードコードされておりオプションで無効化できない。
+    //   通せば TUI が本物のホイール報告を受け取り自前でスクロールする。
+    //
+    //   代償として、左ドラッグはマウストラッキングに消費される。
+    //   テキスト選択は Shift + ドラッグで行う（xterm.js の
+    //   shouldForceSelection が Windows では shiftKey を見るため）。
+    //   右クリックによるコピー・ペーストは影響を受けない
+    //   （xterm.js の contextmenu ハンドラーは preventDefault せず、
+    //   context_menu.js は祖先要素で拾っている）。
 
     // 3.6. 代替画面バッファへの取り残し対策
     this._installAltScreenGuard(term);
@@ -232,50 +239,6 @@ const TerminalManager = {
   },
 
   /* ---- TUI モード制御 (private) ----------------------------------- */
-
-  /**
-   * マウストラッキングのモード設定だけを落とすフィルターを登録する。
-   *
-   * xterm.js の CSI ハンドラーは「シーケンス単位」で処理を打ち切るため、
-   * true を返すと同じ CSI に同居する対象外のモードまで巻き添えで
-   * 無効化される（例: ESC[?1000;1002;1003;1006h の 1006）。
-   * 対象外のモードは組み直して書き戻し、巻き添えを防ぐ。
-   *
-   * 書き戻しは xterm.js の書込みキューに積まれるため、元のシーケンスと
-   * 同じチャンク内では適用されず 1 チャンク遅れる。モード設定の反映が
-   * 数ミリ秒ずれるだけで、表示への影響は無い。
-   *
-   * @param {Terminal} term
-   */
-  _installModeFilter(term) {
-    var blockedModes = [1000, 1002, 1003];
-
-    function makeFilter(final) {
-      return function (params) {
-        var kept = [];
-        var blocked = false;
-        for (var i = 0; i < params.length; i++) {
-          var p = params[i];
-          if (typeof p === 'number' && blockedModes.indexOf(p) !== -1) {
-            blocked = true;
-          } else {
-            // サブパラメーター（配列）は ':' 区切りで元の形へ戻す
-            kept.push(Array.isArray(p) ? p.join(':') : p);
-          }
-        }
-        // 対象外のみなら既定処理へ委譲する
-        if (!blocked) return false;
-        // 巻き添えになったモードだけを組み直して適用する
-        if (kept.length) {
-          term.write('\x1b[?' + kept.join(';') + final);
-        }
-        return true;
-      };
-    }
-
-    term.parser.registerCsiHandler({ final: 'h', prefix: '?' }, makeFilter('h'));
-    term.parser.registerCsiHandler({ final: 'l', prefix: '?' }, makeFilter('l'));
-  },
 
   /**
    * 代替画面バッファへ取り残された場合の保険を登録する。
