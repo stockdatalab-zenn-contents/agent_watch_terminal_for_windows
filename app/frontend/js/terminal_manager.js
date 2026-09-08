@@ -68,14 +68,16 @@ const TERMINAL_OPTIONS = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  マウス報告の判別                                                   */
+/*  マウス報告の抑止条件                                               */
 /* ------------------------------------------------------------------ */
 
-// SGR 形式（DECSET 1006）のマウス報告。
-// 例: ESC[<0;12;3M（押下） / ESC[<64;12;3M（ホイール上）
-// AI ツールは 3 種とも 1006 を要求するため、実際に流れるのはこの形式のみ。
-// 1006 を使わない場合は onBinary 経由になり、awt は転送していない。
-const MOUSE_REPORT_RE = /^\x1b\[<\d+;\d+;\d+[Mm]$/;
+// xterm.js がマウス報告を組み立てるときの action / button の値。
+// bindMouse() の実装に対応する。
+//   mousemove -> action 32 / mouseup -> action 0 / mousedown -> action 1
+//   wheel     -> button 4（action は上 0 / 下 1）
+const MOUSE_ACTION_MOVE = 32;
+const MOUSE_ACTION_UP = 0;
+const MOUSE_BUTTON_WHEEL = 4;
 
 /* ------------------------------------------------------------------ */
 /*  TerminalManager                                                   */
@@ -85,9 +87,6 @@ const TerminalManager = {
 
   /** @type {Object.<string, {term: Terminal, fitAddon: FitAddon, container: HTMLElement}>} */
   terminals: {},
-
-  /** Shift を押しながらマウスを操作している間だけ true。 */
-  _mouseShiftHeld: false,
 
   /* ---- applySettings -------------------------------------------- */
 
@@ -234,18 +233,15 @@ const TerminalManager = {
     // 3.6. 代替画面バッファへの取り残し対策
     this._installAltScreenGuard(term);
 
-    // 3.7. Shift+ドラッグを選択専用にする
-    this._trackShiftDrag(container);
+    // 3.7. 選択を壊すマウス報告を抑止する
+    this._installMouseReportFilter(term);
 
     // 4. Mount into DOM
     term.open(container);
     fitAddon.fit();
 
     // 5. Keyboard input -> Python backend
-    var self = this;
     term.onData(async function (data) {
-      // Shift 押下中のマウス報告は AI ツールへ渡さない
-      if (self._isSuppressedMouseReport(data)) return;
       if (window.pywebview && window.pywebview.api) {
         await window.pywebview.api.send_input(sessionId, data);
       }
@@ -257,47 +253,84 @@ const TerminalManager = {
     return term;
   },
 
-  /* ---- Shift+ドラッグの選択 (private) ------------------------------ */
+  /* ---- マウス報告の抑止 (private) ---------------------------------- */
 
   /**
-   * Shift を押しながらのマウス操作かどうかを記録する。
+   * 選択を壊すマウス報告を、発生源で止める。
    *
-   * マウストラッキングが有効なとき、xterm.js の選択サービスは無効化され、
-   * 押下時のみ shouldForceSelection（Windows では shiftKey）で選択を
-   * 強制できる。ところがドラッグ中の移動報告は Shift を考慮しない。
+   * xterm.js の選択サービスは「ユーザー入力があったら選択を破棄する」
+   * という実装になっている。
    *
-   *   mousedrag: e => { e.buttons && i(e) }   // DRAG / ANY で登録
-   *   mousemove: e => { e.buttons || i(e) }   // ANY で登録
+   *   this._coreService.onUserInput(() => {
+   *     this.hasSelection && this.clearSelection()
+   *   })
    *
-   * そのため Shift+ドラッグで選択している最中も AI ツールへ報告が届き、
-   * ツール側が反応して再描画すると選択が壊れる。ここで Shift の状態を
-   * 拾い、onData 側で報告を落とす。
+   * マウス報告はユーザー入力として送られる（triggerDataEvent の第 2 引数が
+   * true）ため、報告が 1 つ飛ぶたびに選択が消える。マウストラッキングの
+   * プロトコルは ANY まで上がるので、ボタンを押していない移動でも報告が
+   * 飛び、選択後に右クリックへマウスを動かした時点で選択が失われる。
+   * 反転表示だけ残るのは、選択モデルが消えても次の再描画までハイライトが
+   * 描き替えられないため。
    *
-   * @param {HTMLElement} container - ターミナルのラッパー要素
+   * onUserInput は onData より先に発火するので、onData 側では防げない。
+   * 報告の発生源である triggerMouseEvent を包んで止める。
+   *
+   * 抑止する条件は 2 つ。
+   *   - Shift 押下中: すべての報告。ドラッグ中と離した瞬間を守る
+   *   - 選択がある間: 移動と離しの報告。右クリックへ動かす間を守る
+   * 左クリックの押下とホイールは通す。どちらも選択を捨てる意思のある
+   * 操作なので、消えて自然。
+   *
+   * @param {Terminal} term
    */
-  _trackShiftDrag(container) {
-    var self = this;
-    var update = function (e) {
-      self._mouseShiftHeld = e.shiftKey === true;
+  _installMouseReportFilter(term) {
+    var core = term._core;
+    var mouseService = core && core.coreMouseService;
+    if (!mouseService || typeof mouseService.triggerMouseEvent !== 'function') {
+      // xterm.js の更新で内部構造が変わった場合。選択が消える従来の
+      // 挙動に戻るだけで壊れはしないが、気づけるよう記録しておく。
+      console.warn(
+        'coreMouseService.triggerMouseEvent が見つからないため、'
+        + 'マウス報告の抑止を適用できない'
+      );
+      return;
+    }
+
+    var original = mouseService.triggerMouseEvent.bind(mouseService);
+    mouseService.triggerMouseEvent = function (event) {
+      if (TerminalManager._shouldSuppressMouseReport(term, event)) return false;
+      return original(event);
     };
-    // xterm.js のリスナーより先に状態を更新するためキャプチャで拾う。
-    ['mousedown', 'mousemove', 'mouseup'].forEach(function (type) {
-      container.addEventListener(type, update, true);
-    });
   },
 
   /**
-   * PTY へ送らずに捨てるべきマウス報告かどうかを返す。
+   * マウス報告を抑止すべきかを返す。
    *
-   * マウス報告は triggerMouseEvent -> triggerDataEvent -> onData を
-   * 通るため、ここで落とせば PTY へ届かない。Shift を押していない
-   * 通常のマウス操作（ホイールでの出力欄スクロール等）は素通しする。
-   *
-   * @param {string} data - onData が渡す入力データ
-   * @returns {boolean} 捨てるなら true
+   * @param {Terminal} term
+   * @param {{action: number, button: number, shift: boolean}} event
+   * @returns {boolean} 抑止するなら true
    */
-  _isSuppressedMouseReport(data) {
-    return this._mouseShiftHeld && MOUSE_REPORT_RE.test(data);
+  _shouldSuppressMouseReport(term, event) {
+    if (!event) return false;
+
+    // Shift 押下中は選択のための操作とみなし、すべて抑止する
+    if (event.shift) return true;
+
+    // ホイールは選択を捨てる意思のある操作なので通す
+    if (event.button === MOUSE_BUTTON_WHEEL) return false;
+
+    var hasSelection = false;
+    try {
+      hasSelection = term.hasSelection();
+    } catch (e) {
+      return false;
+    }
+    if (!hasSelection) return false;
+
+    // 選択がある間は、移動と離しだけ抑止する。
+    // 押下は通し、そこで選択が解除されるのに任せる。
+    return event.action === MOUSE_ACTION_MOVE
+      || event.action === MOUSE_ACTION_UP;
   },
 
   /* ---- TUI モード制御 (private) ----------------------------------- */
