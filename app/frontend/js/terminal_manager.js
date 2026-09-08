@@ -53,6 +53,13 @@ const TERMINAL_OPTIONS = {
   theme:             Object.assign({}, CATPPUCCIN_MOCHA_THEME),
   fontFamily:        "'Consolas', 'Segoe UI Emoji', 'Courier New', monospace",
   fontSize:          14,
+  // 初期寸法。PTY 側（session_manager._spawn_pty）と同じ値を使う。
+  // xterm.js の既定は 80x24 で PTY の既定と食い違うため明示する。
+  // 非アクティブセッションは切り替えるまで fit されず、食い違ったままだと
+  // PSReadLine が PTY の桁数前提で出すカーソル復帰がずれて表示が崩れる。
+  // settings.json の terminal.initial_cols / initial_rows で上書きできる。
+  cols:              120,
+  rows:              30,
   cursorStyle:       'bar',
   cursorBlink:       true,
   scrollback:        5000,
@@ -95,6 +102,14 @@ const TerminalManager = {
     }
     if (typeof termSettings.scrollback === 'number') {
       TERMINAL_OPTIONS.scrollback = termSettings.scrollback;
+    }
+    // 初期寸法。PTY 側も同じ設定値を読むため、ここで揃えておく。
+    // 0 以下だと xterm.js が例外を投げるため下限を設ける。
+    if (typeof termSettings.initial_cols === 'number' && termSettings.initial_cols > 0) {
+      TERMINAL_OPTIONS.cols = termSettings.initial_cols;
+    }
+    if (typeof termSettings.initial_rows === 'number' && termSettings.initial_rows > 0) {
+      TERMINAL_OPTIONS.rows = termSettings.initial_rows;
     }
     if (typeof termSettings.cursor_blink === 'boolean') {
       TERMINAL_OPTIONS.cursorBlink = termSettings.cursor_blink;
@@ -178,33 +193,26 @@ const TerminalManager = {
     const serializeAddon = new SerializeAddon.SerializeAddon();
     term.loadAddon(serializeAddon);
 
-    // 3.5. TUI エスケープシーケンスのブロック
-    // モニタリング用途では scrollback 確保とテキスト選択を優先し、
-    // TUI が要求する以下のモードをブロックする。
+    // 3.5. TUI エスケープシーケンスの取り扱い
     //
-    // Alternate screen buffer (1049, 47, 1047):
-    //   Copilot CLI 等が切り替え後に復帰しない → scrollback 消失 →
-    //   カスタムスクロールバーが非表示になる問題を防止。
+    // Alternate screen buffer (1049, 47, 1047) は通す。
+    //   ブロックすると TUI の全画面描画が通常バッファへ流れ込む。
+    //   TUI は画面消去（ESC[2J / ESC[K）を出さず代替画面の切替に
+    //   任せる設計のため、前のフレームが残る・横幅変更時の reflow で
+    //   行がずれる・終了後もフレームが残る、という崩れがそのまま
+    //   scrollback へ焼き付く。代替画面は scrollback を持たないので、
+    //   通せば履歴を一切汚さない。
     //
-    // Mouse tracking (1000, 1002, 1003):
-    //   Copilot CLI が [?1002h] で有効化 → 左クリック+ドラッグが
-    //   xterm.js の selection ではなくマウストラッキングに消費される →
-    //   term.getSelection() が常に空 → 右クリックコピーが動作しない
-    //   問題を防止。tracking 無効時は右クリックもマウスシーケンスとして
-    //   PTY に送信されないため、contextmenu ハンドラーとの二重動作も解消。
-    var blockedModes = [1049, 47, 1047, 1000, 1002, 1003];
-    term.parser.registerCsiHandler({ final: 'h', prefix: '?' }, function (params) {
-      for (var i = 0; i < params.length; i++) {
-        if (blockedModes.indexOf(params[i]) !== -1) return true;
-      }
-      return false;
-    });
-    term.parser.registerCsiHandler({ final: 'l', prefix: '?' }, function (params) {
-      for (var i = 0; i < params.length; i++) {
-        if (blockedModes.indexOf(params[i]) !== -1) return true;
-      }
-      return false;
-    });
+    // Mouse tracking (1000, 1002, 1003) はブロックする。
+    //   有効化されると左クリック+ドラッグが xterm.js の selection では
+    //   なくマウストラッキングに消費され、term.getSelection() が常に空
+    //   になって右クリックコピーが動作しなくなるため。右クリックも
+    //   マウスシーケンスとして PTY へ送られなくなり、contextmenu
+    //   ハンドラーとの二重動作も避けられる。
+    this._installModeFilter(term);
+
+    // 3.6. 代替画面バッファへの取り残し対策
+    this._installAltScreenGuard(term);
 
     // 4. Mount into DOM
     term.open(container);
@@ -221,6 +229,77 @@ const TerminalManager = {
     this.terminals[sessionId] = { term: term, fitAddon: fitAddon, serializeAddon: serializeAddon, container: container };
 
     return term;
+  },
+
+  /* ---- TUI モード制御 (private) ----------------------------------- */
+
+  /**
+   * マウストラッキングのモード設定だけを落とすフィルターを登録する。
+   *
+   * xterm.js の CSI ハンドラーは「シーケンス単位」で処理を打ち切るため、
+   * true を返すと同じ CSI に同居する対象外のモードまで巻き添えで
+   * 無効化される（例: ESC[?1000;1002;1003;1006h の 1006）。
+   * 対象外のモードは組み直して書き戻し、巻き添えを防ぐ。
+   *
+   * 書き戻しは xterm.js の書込みキューに積まれるため、元のシーケンスと
+   * 同じチャンク内では適用されず 1 チャンク遅れる。モード設定の反映が
+   * 数ミリ秒ずれるだけで、表示への影響は無い。
+   *
+   * @param {Terminal} term
+   */
+  _installModeFilter(term) {
+    var blockedModes = [1000, 1002, 1003];
+
+    function makeFilter(final) {
+      return function (params) {
+        var kept = [];
+        var blocked = false;
+        for (var i = 0; i < params.length; i++) {
+          var p = params[i];
+          if (typeof p === 'number' && blockedModes.indexOf(p) !== -1) {
+            blocked = true;
+          } else {
+            // サブパラメーター（配列）は ':' 区切りで元の形へ戻す
+            kept.push(Array.isArray(p) ? p.join(':') : p);
+          }
+        }
+        // 対象外のみなら既定処理へ委譲する
+        if (!blocked) return false;
+        // 巻き添えになったモードだけを組み直して適用する
+        if (kept.length) {
+          term.write('\x1b[?' + kept.join(';') + final);
+        }
+        return true;
+      };
+    }
+
+    term.parser.registerCsiHandler({ final: 'h', prefix: '?' }, makeFilter('h'));
+    term.parser.registerCsiHandler({ final: 'l', prefix: '?' }, makeFilter('l'));
+  },
+
+  /**
+   * 代替画面バッファへ取り残された場合の保険を登録する。
+   *
+   * TUI が ESC[?1049l を出さないまま落ちる（強制終了・クラッシュ等）と、
+   * 通常バッファへ戻れず scrollback が見えないままになる。
+   * awt はシェルのプロンプト表示のたびに OSC 7 を注入しているため、
+   * OSC 7 の到着をもって「シェルへ戻った」とみなし強制復帰させる。
+   * TUI 自身は OSC 7 を出さないので誤爆しない。
+   *
+   * 復帰の書込みはキューに積まれるため、同じチャンクに続くプロンプト
+   * 文字列は代替画面側へ描かれて表示には残らない。TUI が異常終了した
+   * ときだけ通る保険であり、次のプロンプト以降は通常どおり描画される。
+   *
+   * @param {Terminal} term
+   */
+  _installAltScreenGuard(term) {
+    term.parser.registerOscHandler(7, function () {
+      if (term.buffer.active.type === 'alternate') {
+        term.write('\x1b[?1049l');
+      }
+      // cwd 通知としての既定処理は妨げない
+      return false;
+    });
   },
 
   /* ---- destroy --------------------------------------------------- */
@@ -306,7 +385,15 @@ const TerminalManager = {
     var self = this;
     Object.keys(this.terminals).forEach(function (id) {
       try {
-        result[id] = self.terminals[id].serializeAddon.serialize();
+        // 代替画面（TUI の一時的な描画内容）は保存しない。
+        // 復元したいのは通常バッファ側のシェル履歴であり、TUI は
+        // セッション再開時に自分で描き直すため。
+        // モード設定も復元対象から外し、マウストラッキング等が
+        // 書き戻されるのを防ぐ。
+        result[id] = self.terminals[id].serializeAddon.serialize({
+          excludeAltBuffer: true,
+          excludeModes: true,
+        });
       } catch (e) {
         // skip terminals that fail to serialize
       }

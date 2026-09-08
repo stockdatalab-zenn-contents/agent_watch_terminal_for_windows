@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from source.config.settings_manager import get
 from source.session.session_store import SessionStore, create_default_session
 from source.session.session_id_collector import save_session_ids
 from source.detection.agent_patterns import (
@@ -839,9 +840,21 @@ class SessionManager:
         return max(s["order"] for s in self._sessions.values()) + 1
 
     def _spawn_pty(self, session_id: str, cwd: str | None) -> None:
-        """PtyManager を介して PTY を起動する。"""
+        """PtyManager を介して PTY を起動する。
+
+        初期寸法は settings.json の terminal.initial_cols / initial_rows を
+        使う。フロント側の Terminal 生成も同じ値を読むため、ウィンドウが
+        表示されて実サイズへ fit されるまでの間、PTY と xterm.js の寸法が
+        一致する。非アクティブセッションは切り替えるまで fit されないので、
+        ここが食い違うと表示が崩れたまま残る。
+        """
         try:
-            self._pty_manager.create_session(session_id, cwd=cwd)
+            self._pty_manager.create_session(
+                session_id,
+                cols=get("terminal.initial_cols", 120),
+                rows=get("terminal.initial_rows", 30),
+                cwd=cwd,
+            )
             logger.debug("PTY 起動: session=%s, cwd=%s", session_id, cwd)
         except Exception:
             logger.exception("PTY 起動に失敗: session=%s", session_id)

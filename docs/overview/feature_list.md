@@ -64,11 +64,13 @@ AIコーディングツール専用の「見守りターミナル」。
 | F01-01 | PTY 生成・管理 | PTY プロセス起動 | セッション作成時に PowerShell プロセスを疑似端末として起動 | `pty/platform_pty.py` |
 | F01-01 | | PTY 入出力 | キー入力の送信（write）とターミナル出力の非同期読取り（4KB/20ms） | `pty/pty_manager.py` |
 | F01-01 | | PTY リサイズ | ウィンドウ・パネルサイズ変更時に PTY の cols/rows を同期 | `pty/pty_manager.py` |
+| F01-01 | | 初期寸法の一致 | PTY 生成と xterm.js 生成の両方が `settings.json` の `terminal.initial_cols` / `initial_rows` を読み、実サイズへ fit されるまでの寸法不一致を防止（非アクティブセッションはタブ切替まで fit されないため） | `session/session_manager.py`, `frontend/js/terminal_manager.js` |
 | F01-01 | | PTY 破棄 | セッション削除・アプリ終了時にプロセスを安全に終了 | `pty/pty_manager.py` |
 | F01-02 | ターミナル描画 | xterm.js 描画 | PTY 出力を xterm.js で画面描画（Base64 転送） | `frontend/js/terminal_manager.js` |
-| F01-02 | | TUI モード制限 | 代替スクリーンバッファ (1049/47/1047) とマウストラッキング (1000/1002/1003) を遮断し、スクロールバック消失・選択干渉を防止 | `frontend/js/terminal_manager.js` |
+| F01-02 | | TUI モード制限 | マウストラッキング (1000/1002/1003) のみ遮断し、選択干渉を防止。代替スクリーンバッファ (1049/47/1047) は通す（遮断すると TUI の全画面描画が通常バッファへ流れ込み、スクロールバックが崩れるため）。同一 CSI に同居する対象外モードは組み直して適用し、巻き添えでの無効化を回避 | `frontend/js/terminal_manager.js` |
+| F01-02 | | 代替画面の取り残し対策 | TUI が `ESC[?1049l` を出さずに落ちた場合、シェルのプロンプトが出す OSC 7 を契機に通常バッファへ強制復帰 | `frontend/js/terminal_manager.js` |
 | F01-02 | | カーソル可視化 | block カーソルの配色を `!important` で上書きし、truecolor セルの inline style に負けて不可視になる問題を防止（opencode は DECSCUSR `ESC[1 q` で block カーソルを要求） | `frontend/css/terminal.css` |
-| F01-02 | | カスタムスクロールバー | xterm 標準スクロールバーを独自オーバーレイに置換（ドラッグ・クリック操作対応） | `frontend/js/scrollbar.js` |
+| F01-02 | | カスタムスクロールバー | xterm 標準スクロールバーを独自オーバーレイに置換（ドラッグ・クリック操作対応）。代替画面中はスクロールバックが無いため自動的に非表示になり、ホイールは xterm.js がカーソルキーへ変換して TUI 内スクロールとして働く | `frontend/js/scrollbar.js` |
 | F01-03 | クリップボード操作 | コピー | 右クリック時、選択テキストをクリップボードへコピー | `frontend/js/context_menu.js` |
 | F01-03 | | ペースト | 右クリック時（選択なし）、クリップボード内容を PTY へ送信 | `frontend/js/context_menu.js` |
 | F01-04 | リサイズ処理 | ウィンドウリサイズ | ウィンドウサイズ変更をデバウンス（100ms）して xterm.fit() 実行 | `frontend/js/resize_handler.js` |
